@@ -431,7 +431,6 @@ describe('E2E: Full SQLite Lifecycle', () => {
 
   it('workspace learnings do not appear in search from a different workspace (WS-AC-23)', async () => {
     const WS_A = '/home/user/repos/personal/';
-    const WS_B = '/home/user/repos/work/';
 
     const wsALearning = await service.storeLearning({
       content: 'Personal workspace: use hobby project conventions.',

@@ -2,7 +2,7 @@
  * Unit tests for API key generation, hashing, and access control.
  * Traces to AC-20, AC-21, AC-22, AC-23.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   generateApiKey,
   hashApiKey,
