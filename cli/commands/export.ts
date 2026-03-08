@@ -40,6 +40,7 @@ export function registerExportCommand(program: Command): void {
           category: r.category,
           tags: r.tags,
           repository: r.repository,
+          workspace: r.workspace,
           group_id: r.group_id,
           source: r.source,
           status: r.status,

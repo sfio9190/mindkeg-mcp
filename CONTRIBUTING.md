@@ -10,7 +10,7 @@ Thanks for your interest in contributing! This guide covers how to get set up an
 ## Getting Started
 
 ```bash
-git clone https://github.com/carloditan24/mindkeg-mcp.git
+git clone https://github.com/carloluisito/mindkeg-mcp.git
 cd mindkeg-mcp
 npm install
 npm run build
@@ -65,7 +65,7 @@ npm run build
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/carloditan24/mindkeg-mcp/issues) to report bugs or request features. Include:
+Use [GitHub Issues](https://github.com/carloluisito/mindkeg-mcp/issues) to report bugs or request features. Include:
 
 - Steps to reproduce (for bugs)
 - Node.js version (`node --version`)

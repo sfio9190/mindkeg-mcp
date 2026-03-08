@@ -23,7 +23,7 @@ src/index.ts            Entry point, transport setup
 src/server.ts           MCP server, tool registration
 src/config.ts           Config loading (env vars → defaults)
 src/auth/               API key generation + middleware
-src/tools/              One file per MCP tool (6 tools)
+src/tools/              One file per MCP tool (8 tools)
 src/services/           Business logic (LearningService, EmbeddingService)
 src/storage/            StorageAdapter interface + SQLite impl
 src/models/             Zod schemas + TypeScript types

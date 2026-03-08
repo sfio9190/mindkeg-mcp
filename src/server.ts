@@ -1,6 +1,6 @@
 /**
- * MCP server setup: creates the McpServer instance and registers all 6 tools.
- * Traces to AC-16 (all 6 tools), AC-17 (stdio), AC-18 (HTTP+SSE).
+ * MCP server setup: creates the McpServer instance and registers all 8 tools.
+ * Traces to AC-16 (all 8 tools), AC-17 (stdio), AC-18 (HTTP+SSE).
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { StorageAdapter } from './storage/storage-adapter.js';

@@ -46,16 +46,13 @@
   "author": "Carlo",
   "repository": {
     "type": "git",
-    "url": "https://github.com/carloditan24/mindkeg-mcp.git"
+    "url": "https://github.com/carloluisito/mindkeg-mcp.git"
   },
-  "homepage": "https://github.com/carloditan24/mindkeg-mcp#readme",
+  "homepage": "https://github.com/carloluisito/mindkeg-mcp#readme",
   "bugs": {
-    "url": "https://github.com/carloditan24/mindkeg-mcp/issues"
+    "url": "https://github.com/carloluisito/mindkeg-mcp/issues"
   },
   "license": "MIT",
-  "overrides": {
-    "tar": ">=7.5.10"
-  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "commander": "^12.1.0",

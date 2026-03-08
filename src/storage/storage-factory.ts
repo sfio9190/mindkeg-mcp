@@ -13,7 +13,7 @@ import { SqliteAdapter } from './sqlite-adapter.js';
 export function createStorageAdapter(config: Config): StorageAdapter {
   if (config.storage.backend !== 'sqlite') {
     throw new Error(
-      `Unknown storage backend: ${config.storage.backend}. Only "sqlite" is supported in the open-source edition.`
+      `Unknown storage backend: ${config.storage.backend}. Only "sqlite" is currently supported.`
     );
   }
   return new SqliteAdapter(config.storage.sqlitePath);

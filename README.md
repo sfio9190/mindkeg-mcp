@@ -302,7 +302,7 @@ src/
   server.ts         MCP server + tool registration
   config.ts         Config loading (env vars → defaults)
   auth/             API key generation + validation middleware
-  tools/            One file per MCP tool (6 tools)
+  tools/            One file per MCP tool (8 tools)
   services/         LearningService + EmbeddingService
   storage/          StorageAdapter interface + SQLite impl
   models/           Zod schemas + TypeScript types
