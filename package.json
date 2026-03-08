@@ -1,0 +1,77 @@
+{
+  "name": "mindkeg-mcp",
+  "version": "0.1.0",
+  "description": "A persistent memory MCP server for AI coding agents — stores, searches, and retrieves atomic learnings per repository.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./storage": "./dist/storage/storage-adapter.js",
+    "./services": "./dist/services/index.js",
+    "./models": "./dist/models/index.js",
+    "./utils": "./dist/utils/index.js",
+    "./server": "./dist/server/index.js"
+  },
+  "bin": {
+    "mindkeg": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src cli tests",
+    "typecheck": "tsc --noEmit",
+    "serve:stdio": "node --experimental-sqlite dist/cli/index.js serve --stdio",
+    "serve:http": "node --experimental-sqlite dist/cli/index.js serve --http"
+  },
+  "keywords": [
+    "mcp",
+    "ai",
+    "memory",
+    "agent",
+    "claude",
+    "cursor",
+    "learning",
+    "knowledge"
+  ],
+  "author": "Carlo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/carloditan24/mindkeg-mcp.git"
+  },
+  "homepage": "https://github.com/carloditan24/mindkeg-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/carloditan24/mindkeg-mcp/issues"
+  },
+  "license": "MIT",
+  "overrides": {
+    "tar": ">=7.5.10"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "commander": "^12.1.0",
+    "fastembed": "^2.1.0",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.2.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.14.0",
+    "@typescript-eslint/parser": "^7.14.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "eslint": "^8.57.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.4.5",
+    "vitest": "^2.0.0"
+  }
+}
