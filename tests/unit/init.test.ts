@@ -1,0 +1,264 @@
+/**
+ * Unit tests for the `mindkeg init` command helpers.
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
+import {
+  detectAgents,
+  writeMcpConfig,
+  writeAgentInstructions,
+} from '../../cli/commands/init.js';
+
+/** Create a fresh temp directory for each test. */
+function makeTempDir(): string {
+  return mkdtempSync(join(tmpdir(), 'mindkeg-init-test-'));
+}
+
+/** Path to the real templates dir in the repo. */
+const TEMPLATES_DIR = join(import.meta.dirname, '..', '..', 'templates');
+
+describe('detectAgents', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns empty array when no agent directories exist', () => {
+    expect(detectAgents(dir)).toEqual([]);
+  });
+
+  it('detects .claude directory as claude-code', () => {
+    mkdirSync(join(dir, '.claude'));
+    expect(detectAgents(dir)).toEqual(['claude-code']);
+  });
+
+  it('detects .cursor directory as cursor', () => {
+    mkdirSync(join(dir, '.cursor'));
+    expect(detectAgents(dir)).toEqual(['cursor']);
+  });
+
+  it('detects .windsurf directory as windsurf', () => {
+    mkdirSync(join(dir, '.windsurf'));
+    expect(detectAgents(dir)).toEqual(['windsurf']);
+  });
+
+  it('detects multiple agents simultaneously', () => {
+    mkdirSync(join(dir, '.claude'));
+    mkdirSync(join(dir, '.cursor'));
+    const result = detectAgents(dir);
+    expect(result).toContain('claude-code');
+    expect(result).toContain('cursor');
+    expect(result).toHaveLength(2);
+  });
+
+  it('detects all three agents', () => {
+    mkdirSync(join(dir, '.claude'));
+    mkdirSync(join(dir, '.cursor'));
+    mkdirSync(join(dir, '.windsurf'));
+    expect(detectAgents(dir)).toHaveLength(3);
+  });
+});
+
+describe('writeMcpConfig', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('creates .claude/mcp.json with mindkeg entry for claude-code', () => {
+    const result = writeMcpConfig(dir, 'claude-code');
+    expect(result.created).toBe(true);
+
+    const config = JSON.parse(readFileSync(join(dir, '.claude', 'mcp.json'), 'utf-8'));
+    expect(config.mcpServers.mindkeg).toBeDefined();
+    expect(config.mcpServers.mindkeg.command).toBe('npx');
+    expect(config.mcpServers.mindkeg.args).toContain('mindkeg-mcp');
+    expect(config.mcpServers.mindkeg.args).toContain('--stdio');
+  });
+
+  it('creates .cursor/mcp.json for cursor', () => {
+    const result = writeMcpConfig(dir, 'cursor');
+    expect(result.created).toBe(true);
+    expect(existsSync(join(dir, '.cursor', 'mcp.json'))).toBe(true);
+  });
+
+  it('creates .windsurf/mcp.json for windsurf', () => {
+    const result = writeMcpConfig(dir, 'windsurf');
+    expect(result.created).toBe(true);
+    expect(existsSync(join(dir, '.windsurf', 'mcp.json'))).toBe(true);
+  });
+
+  it('merges with existing mcp.json without overwriting other servers', () => {
+    const configDir = join(dir, '.claude');
+    mkdirSync(configDir);
+    writeFileSync(
+      join(configDir, 'mcp.json'),
+      JSON.stringify({ mcpServers: { 'other-server': { command: 'other' } } }),
+      'utf-8',
+    );
+
+    const result = writeMcpConfig(dir, 'claude-code');
+    expect(result.created).toBe(true);
+
+    const config = JSON.parse(readFileSync(join(configDir, 'mcp.json'), 'utf-8'));
+    expect(config.mcpServers['other-server']).toBeDefined();
+    expect(config.mcpServers['other-server'].command).toBe('other');
+    expect(config.mcpServers.mindkeg).toBeDefined();
+  });
+
+  it('returns created=false if mindkeg is already configured', () => {
+    // First call creates
+    writeMcpConfig(dir, 'claude-code');
+    // Second call skips
+    const result = writeMcpConfig(dir, 'claude-code');
+    expect(result.created).toBe(false);
+  });
+
+  it('does not modify file when mindkeg already exists', () => {
+    writeMcpConfig(dir, 'claude-code');
+    const contentBefore = readFileSync(join(dir, '.claude', 'mcp.json'), 'utf-8');
+
+    writeMcpConfig(dir, 'claude-code');
+    const contentAfter = readFileSync(join(dir, '.claude', 'mcp.json'), 'utf-8');
+
+    expect(contentAfter).toBe(contentBefore);
+  });
+
+  it('handles malformed existing JSON by overwriting', () => {
+    const configDir = join(dir, '.claude');
+    mkdirSync(configDir);
+    writeFileSync(join(configDir, 'mcp.json'), '{ broken json !!!', 'utf-8');
+
+    const result = writeMcpConfig(dir, 'claude-code');
+    expect(result.created).toBe(true);
+
+    const config = JSON.parse(readFileSync(join(configDir, 'mcp.json'), 'utf-8'));
+    expect(config.mcpServers.mindkeg).toBeDefined();
+  });
+
+  it('preserves non-mcpServers keys in existing config', () => {
+    const configDir = join(dir, '.claude');
+    mkdirSync(configDir);
+    writeFileSync(
+      join(configDir, 'mcp.json'),
+      JSON.stringify({ someOtherKey: 'value', mcpServers: {} }),
+      'utf-8',
+    );
+
+    writeMcpConfig(dir, 'claude-code');
+    const config = JSON.parse(readFileSync(join(configDir, 'mcp.json'), 'utf-8'));
+    expect(config.someOtherKey).toBe('value');
+    expect(config.mcpServers.mindkeg).toBeDefined();
+  });
+
+  it('includes MINDKEG_EMBEDDING_PROVIDER in env config', () => {
+    writeMcpConfig(dir, 'claude-code');
+    const config = JSON.parse(readFileSync(join(dir, '.claude', 'mcp.json'), 'utf-8'));
+    expect(config.mcpServers.mindkeg.env.MINDKEG_EMBEDDING_PROVIDER).toBe('fastembed');
+  });
+});
+
+describe('writeAgentInstructions', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTempDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('creates AGENTS.md when no instruction files exist (claude-code without CLAUDE.md)', () => {
+    const result = writeAgentInstructions(dir, 'claude-code', TEMPLATES_DIR);
+    expect(result.action).toBe('created');
+    expect(result.path).toBe(join(dir, 'AGENTS.md'));
+
+    const content = readFileSync(result.path, 'utf-8');
+    expect(content).toContain('Mind Keg');
+    expect(content).toContain('store_learning');
+  });
+
+  it('appends to existing CLAUDE.md for claude-code agent', () => {
+    writeFileSync(join(dir, 'CLAUDE.md'), '# My Project\n\nSome instructions.', 'utf-8');
+
+    const result = writeAgentInstructions(dir, 'claude-code', TEMPLATES_DIR);
+    expect(result.action).toBe('appended');
+    expect(result.path).toBe(join(dir, 'CLAUDE.md'));
+
+    const content = readFileSync(result.path, 'utf-8');
+    expect(content).toMatch(/^# My Project/);
+    expect(content).toContain('Mind Keg');
+  });
+
+  it('skips if CLAUDE.md already contains Mind Keg instructions', () => {
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n\nMind Keg is configured.', 'utf-8');
+
+    const result = writeAgentInstructions(dir, 'claude-code', TEMPLATES_DIR);
+    expect(result.action).toBe('skipped');
+  });
+
+  it('creates AGENTS.md for cursor agent', () => {
+    const result = writeAgentInstructions(dir, 'cursor', TEMPLATES_DIR);
+    expect(result.action).toBe('created');
+    expect(result.path).toBe(join(dir, 'AGENTS.md'));
+  });
+
+  it('appends to existing AGENTS.md if it exists (cursor)', () => {
+    writeFileSync(join(dir, 'AGENTS.md'), '# Other Agent Instructions\n', 'utf-8');
+
+    const result = writeAgentInstructions(dir, 'cursor', TEMPLATES_DIR);
+    expect(result.action).toBe('appended');
+
+    const content = readFileSync(result.path, 'utf-8');
+    expect(content).toMatch(/^# Other Agent Instructions/);
+    expect(content).toContain('Mind Keg');
+  });
+
+  it('skips if AGENTS.md already contains Mind Keg instructions (cursor)', () => {
+    writeFileSync(join(dir, 'AGENTS.md'), '# Mind Keg Instructions\n', 'utf-8');
+
+    const result = writeAgentInstructions(dir, 'cursor', TEMPLATES_DIR);
+    expect(result.action).toBe('skipped');
+  });
+
+  it('does not duplicate content on repeated appends', () => {
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
+
+    writeAgentInstructions(dir, 'claude-code', TEMPLATES_DIR);
+    const result2 = writeAgentInstructions(dir, 'claude-code', TEMPLATES_DIR);
+    expect(result2.action).toBe('skipped');
+  });
+
+  it('created AGENTS.md contains all 8 tool references', () => {
+    writeAgentInstructions(dir, 'cursor', TEMPLATES_DIR);
+    const content = readFileSync(join(dir, 'AGENTS.md'), 'utf-8');
+
+    const tools = [
+      'store_learning',
+      'search_learnings',
+      'update_learning',
+      'deprecate_learning',
+      'flag_stale',
+      'delete_learning',
+      'list_repositories',
+      'list_workspaces',
+    ];
+    for (const tool of tools) {
+      expect(content).toContain(tool);
+    }
+  });
+});

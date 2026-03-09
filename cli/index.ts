@@ -10,6 +10,8 @@ import { registerApiKeyCommand } from './commands/api-key.js';
 import { registerMigrateCommand } from './commands/migrate.js';
 import { registerExportCommand } from './commands/export.js';
 import { registerImportCommand } from './commands/import.js';
+import { registerInitCommand } from './commands/init.js';
+import { registerStatsCommand } from './commands/stats.js';
 
 program
   .name('mindkeg')
@@ -21,6 +23,8 @@ registerApiKeyCommand(program);
 registerMigrateCommand(program);
 registerExportCommand(program);
 registerImportCommand(program);
+registerInitCommand(program);
+registerStatsCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error('Fatal error:', err instanceof Error ? err.message : String(err));
