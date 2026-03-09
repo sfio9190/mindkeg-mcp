@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-09
+
+### Added
+- `mindkeg init` command for quick project setup — auto-detects agent tooling (Claude Code, Cursor, Windsurf), writes MCP config, copies agent instructions, and runs a health check
+- `mindkeg stats` command to display database statistics — learning counts, category breakdown, scope distribution, embedding coverage, DB file size, with `--json` output support
+- `getStats()` method on the storage adapter for aggregate database queries
+
+### Fixed
+- Skip CUDA binary download in CI to prevent transient 502 failures
+
 ## [0.1.1] - 2026-03-08
 
 ### Added

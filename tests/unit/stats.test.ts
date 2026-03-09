@@ -111,9 +111,9 @@ describe('SqliteAdapter.getStats', () => {
     await adapter.createLearning(makeRecord({ category: 'conventions' }));
 
     const stats = await adapter.getStats();
-    expect(stats.byCategory[0].category).toBe('conventions');
-    expect(stats.byCategory[1].category).toBe('gotchas');
-    expect(stats.byCategory[2].category).toBe('debugging');
+    expect(stats.byCategory[0]!.category).toBe('conventions');
+    expect(stats.byCategory[1]!.category).toBe('gotchas');
+    expect(stats.byCategory[2]!.category).toBe('debugging');
   });
 
   it('breaks down by repository', async () => {

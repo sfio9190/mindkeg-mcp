@@ -200,7 +200,7 @@ function runHealthCheck(): { db: boolean; embeddings: boolean; dbError?: string;
 
   // Node version check as proxy
   const nodeVersion = process.versions.node;
-  const major = parseInt(nodeVersion.split('.')[0], 10);
+  const major = parseInt(nodeVersion.split('.')[0] ?? '0', 10);
   if (major < 22) {
     result.db = false;
     result.dbError = `Node.js ${nodeVersion} detected. Mind Keg requires Node.js 22+.`;
@@ -272,7 +272,8 @@ export function registerInitCommand(program: Command): void {
         try {
           const templatesDir = findTemplatesDir();
           // Write instructions for the first agent (avoid duplicating AGENTS.md)
-          const result = writeAgentInstructions(projectRoot, agents[0], templatesDir);
+          const firstAgent = agents[0] as Agent;
+          const result = writeAgentInstructions(projectRoot, firstAgent, templatesDir);
           switch (result.action) {
             case 'created':
               console.log(`  ✓ Created ${result.path}`);
