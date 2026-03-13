@@ -8,28 +8,41 @@ You have access to **Mind Keg**, a persistent memory system. It stores atomic le
 
 1. Determine the current repository path and workspace path (parent folder) from the working directory.
 
-2. Search for learnings relevant to what the user is working on. **You MUST search all three scopes explicitly**, as a single query does not reliably return results across scopes:
+2. Call `get_context` to prime yourself with all relevant learnings in one call:
 
    ```
-   // Step 1: Search repo scope
+   get_context({ repository: "<current repo path>" })
+   ```
+
+   This returns learnings partitioned into `repo_learnings`, `workspace_learnings`, and `global_learnings`, ranked by actionability (gotchas first). It also surfaces `stale_review` items (learnings that may be outdated) and `near_duplicates` (redundant pairs for cleanup).
+
+   **Optional parameters:**
+   - `path_hint`: Subdirectory you're working in (e.g., `"packages/api"`) — boosts topically relevant learnings.
+   - `query`: Topic focus (e.g., `"authentication"`) — applies semantic ranking boost.
+   - `budget`: `"compact"`, `"standard"` (default), or `"full"` — controls how many learnings fit in the response.
+
+3. If `get_context` returns a `stale_review` array with items, examine them. For each:
+   - If the learning is confirmed outdated: use `deprecate_learning` and store a corrected version.
+   - If you're unsure: leave it flagged (do not clear the flag).
+
+4. If `get_context` returns `near_duplicates`, note the pairs. Offer to consolidate them at the end of the session.
+
+5. For topic-specific work, use `search_learnings` to find learnings you know to look for. **You MUST search all three scopes explicitly** if you need targeted results:
+
+   ```
+   // Repo scope
    search_learnings({ query: "<short keywords>", repository: "<current repo path>" })
 
-   // Step 2: Search workspace scope
+   // Workspace scope
    search_learnings({ query: "<short keywords>", workspace: "<parent folder path>" })
 
-   // Step 3: Search global scope (omit both repository and workspace)
+   // Global scope (omit both)
    search_learnings({ query: "<short keywords>" })
    ```
 
-   These three calls can be made **in parallel**. Each result includes a `scope` field (`"repo"`, `"workspace"`, or `"global"`) so you know the breadth of each learning.
+   Use **short, focused queries** (1-3 keywords). Semantic search performs poorly with long sentences.
 
-   **IMPORTANT — Query Best Practices:**
-   - Use **short, focused queries** (1-3 keywords) — e.g., `"feed"`, `"auth guard"`, `"prisma migrations"`. Semantic search performs poorly with long, descriptive sentences.
-   - If a query returns 0 results, **retry with shorter or broader terms** before concluding nothing exists. For example, `"feed"` finds results that `"feeds feature, feed service, posts, comments, following"` misses entirely.
-   - When a task spans multiple topics, make **separate short queries** for each topic rather than one combined query.
-   - If a search in one scope returns 0 results, do NOT assume the learning doesn't exist — always check the other scopes before concluding.
-
-3. Read the results and incorporate relevant learnings into your approach **before writing any code**.
+6. Read the results and incorporate relevant learnings into your approach **before writing any code**.
 
 ## During the Session
 
@@ -174,6 +187,27 @@ List all workspace directories that have workspace-scoped learnings, along with 
 ```json
 {}
 ```
+
+### get_context
+
+Prime an agent session with all relevant learnings for the current repository in one call. Returns learnings ranked by actionability, partitioned by scope, and trimmed to a character budget. Always safe to call — read-only.
+
+```json
+{
+  "repository": "/path/to/current/repo",
+  "path_hint": "packages/api",
+  "query": "authentication",
+  "budget": "standard"
+}
+```
+
+Response sections:
+- `repo_learnings`: Repo-scoped learnings (ranked: gotchas → conventions → decisions → dependencies)
+- `workspace_learnings`: Workspace-scoped learnings
+- `global_learnings`: Global learnings
+- `stale_review`: Stale-flagged learnings for your attention
+- `near_duplicates`: Near-duplicate pairs to consider consolidating
+- `summary`: Counts per scope and most-recent `last_updated` timestamp
 
 ---
 
