@@ -267,6 +267,9 @@ describe('createEmbeddingService', () => {
       embedding: { provider: provider as 'fastembed' | 'openai' | 'none', openaiKey },
       server: { host: '127.0.0.1', port: 52100, logLevel: 'error' },
       auth: { apiKey: undefined },
+      audit: { destination: 'none' },
+      security: { encryptionKey: undefined, rateLimitWriteRpm: 100, rateLimitReadRpm: 300, metricsAuth: false },
+      retention: { defaultTtlDays: null, purgeIntervalHours: 24 },
     };
   }
 

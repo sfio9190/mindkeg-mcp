@@ -66,6 +66,12 @@ export interface CreateLearningRecord {
   group_id: string | null;
   source: string;
   embedding: number[] | null;
+  /** Per-learning TTL in days. Null means no expiration (ESH-AC-15). */
+  ttl_days?: number | null;
+  /** Free-form provenance string (ESH-AC-25). */
+  source_agent?: string | null;
+  /** SHA-256 integrity hash (ESH-AC-26). */
+  integrity_hash?: string | null;
 }
 
 /** Input for updating a learning in storage. */
@@ -79,6 +85,12 @@ export interface UpdateLearningRecord {
   embedding?: number[] | null;
   workspace?: string | null;    // WS-AC-8
   repository?: string | null;   // WS-AC-8
+  /** Per-learning TTL in days. Null clears the TTL (ESH-AC-15). */
+  ttl_days?: number | null;
+  /** Free-form provenance string (ESH-AC-25). */
+  source_agent?: string | null;
+  /** SHA-256 integrity hash (ESH-AC-26). */
+  integrity_hash?: string | null;
 }
 
 /** Filters for searching learnings. */
@@ -102,6 +114,21 @@ export interface ListAllFilters {
   include_deprecated?: boolean;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * Filters for bulk-purge operations (ESH-AC-18).
+ * All fields are optional; at least one must be set (enforced by purge-service).
+ */
+export interface PurgeByFilterOptions {
+  /** Purge learnings older than this many days (anchored on updated_at). */
+  olderThanDays?: number;
+  /** Purge all learnings for this repository path. */
+  repository?: string;
+  /** Purge all learnings for this workspace path. */
+  workspace?: string;
+  /** Purge ALL learnings (requires explicit confirmation by caller). */
+  all?: boolean;
 }
 
 /** Input for creating an API key record in storage. */
@@ -205,6 +232,36 @@ export interface StorageAdapter {
 
   /** Update last_used_at timestamp on an API key. */
   touchApiKey(id: string): Promise<void>;
+
+  // --- Purge (ESH-AC-17, ESH-AC-18) ---
+
+  /**
+   * Purge learnings that have exceeded their TTL.
+   * A learning is expired when: ttl_days IS NOT NULL AND
+   *   (julianday('now') - julianday(updated_at)) > ttl_days
+   *
+   * When defaultTtlDays is provided, learnings with ttl_days = NULL are also
+   * evaluated against the global default TTL.
+   *
+   * IMPORTANT: This method is synchronous (returns number, not Promise<number>)
+   * to match the node:sqlite DatabaseSync pattern.
+   *
+   * @param defaultTtlDays - Global default TTL in days. Null means only per-learning TTLs are evaluated.
+   * @returns Number of learnings purged.
+   */
+  purgeExpired(defaultTtlDays: number | null): number;
+
+  /**
+   * Purge learnings matching the given filter criteria.
+   * Used by the `mindkeg purge` CLI command and by purge-service (ESH-AC-18).
+   *
+   * IMPORTANT: This method is synchronous (returns number, not Promise<number>)
+   * to match the node:sqlite DatabaseSync pattern.
+   *
+   * @param options - At least one filter field must be set.
+   * @returns Number of learnings purged.
+   */
+  purgeByFilter(options: PurgeByFilterOptions): number;
 
   // --- Stats ---
 

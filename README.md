@@ -32,6 +32,7 @@ Unlike traditional RAG systems that chunk large documents, Mind Keg stores **pre
 - API key authentication with per-repository access control
 - SQLite storage (zero dependencies, zero config)
 - Import/export for backup and migration
+- **Enterprise security**: encryption at rest, audit logging, TTL/data retention, Prometheus monitoring, rate limiting, content integrity verification
 
 ## Quick Start
 
@@ -206,6 +207,18 @@ mindkeg dedup-scan --dry-run
 # Backup and restore
 mindkeg export --output backup.json
 mindkeg import backup.json --regenerate-embeddings
+
+# Data retention
+mindkeg purge --older-than 90          # Purge learnings older than 90 days
+mindkeg purge --repository /path/repo  # Purge all learnings for a repo
+mindkeg purge --all --confirm          # Purge everything (requires --confirm)
+
+# Encryption at rest
+mindkeg encrypt-db   # Encrypt existing database (requires MINDKEG_ENCRYPTION_KEY)
+mindkeg decrypt-db   # Decrypt existing database (requires MINDKEG_ENCRYPTION_KEY)
+
+# Integrity backfill
+mindkeg backfill-integrity  # Compute SHA-256 hashes for legacy learnings
 ```
 
 ## Configuration
@@ -243,24 +256,131 @@ export MINDKEG_EMBEDDING_PROVIDER=none
 
 Disables semantic search and falls back to SQLite FTS5 full-text search — all other features work identically.
 
+## Enterprise Security
+
+Mind Keg 0.4.0 ships a suite of security features suitable for corporate and regulated environments.
+
+### Encryption at Rest
+
+Encrypt `content` and `embedding` fields using AES-256-GCM. All other fields (category, tags, timestamps) remain plaintext.
+
+```bash
+# Generate a 256-bit key
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+export MINDKEG_ENCRYPTION_KEY=<your-base64-key>
+mindkeg serve --stdio
+```
+
+To encrypt an existing database in-place:
+
+```bash
+MINDKEG_ENCRYPTION_KEY=<key> mindkeg encrypt-db
+# Creates a backup automatically before operating
+```
+
+> **Note**: FTS5 keyword search does not work when encryption is enabled. Use FastEmbed or OpenAI embedding providers for search.
+
+### Audit Logging
+
+All MCP tool invocations are written to a structured JSON lines audit log (SIEM-compatible).
+
+```bash
+export MINDKEG_AUDIT_LOG=~/.mindkeg/audit.jsonl  # default
+# Or: MINDKEG_AUDIT_LOG=stderr  (write to stderr alongside app logs)
+# Or: MINDKEG_AUDIT_LOG=none    (disable)
+```
+
+Each audit entry contains: `timestamp` (ISO 8601), `action`, `actor` (API key prefix), `resource_id`, `result`, `client` transport metadata. Sensitive fields (`content`, `embedding`) are never logged.
+
+### TTL and Data Retention
+
+Set a global default TTL or a per-learning TTL to automatically expire old entries.
+
+```bash
+export MINDKEG_DEFAULT_TTL_DAYS=365    # Expire all learnings after 1 year by default
+export MINDKEG_PURGE_INTERVAL_HOURS=24 # Run purge every 24 hours (default)
+```
+
+Per-learning TTL overrides the global default:
+
+```json
+{ "content": "...", "ttl_days": 30 }
+```
+
+Manual purge:
+
+```bash
+mindkeg purge --older-than 180 --confirm
+```
+
+### Monitoring
+
+HTTP transport exposes Prometheus-compatible endpoints:
+
+```
+GET /health   → JSON: { status, version, uptime, database }
+GET /metrics  → Prometheus text format
+```
+
+Both endpoints are unauthenticated by default. Set `MINDKEG_METRICS_AUTH=true` to require API key auth.
+
+Metrics exposed: `mindkeg_learnings_total`, `mindkeg_tool_invocations_total`, `mindkeg_tool_duration_seconds`, `mindkeg_errors_total`, `mindkeg_uptime_seconds`, `mindkeg_search_latency_seconds`.
+
+### Rate Limiting
+
+HTTP transport enforces per-API-key token bucket rate limits with separate write and read buckets.
+
+```bash
+export MINDKEG_RATE_LIMIT_WRITE_RPM=100  # default: 100 write req/min per key
+export MINDKEG_RATE_LIMIT_READ_RPM=300   # default: 300 read req/min per key
+```
+
+Returns HTTP 429 with `Retry-After` header when exceeded. stdio transport is not rate-limited.
+
+### Supply Chain Security
+
+- npm packages published with `--provenance` (Sigstore attestation via GitHub Actions)
+- CycloneDX SBOM generated and uploaded as a release asset on every GitHub release
+- Cosign signatures for npm tarballs uploaded as release assets
+
+### Content Integrity
+
+SHA-256 integrity hashes are computed and stored for every learning on write. Verify on demand:
+
+```json
+{ "query": "...", "verify_integrity": true }
+```
+
+Each result includes `integrity_valid: true | false | null` (`null` for legacy learnings without a stored hash).
+
+Backfill integrity hashes for existing learnings:
+
+```bash
+mindkeg backfill-integrity
+```
+
 ## Data Model
 
 Each learning contains:
 
-| Field        | Type              | Notes                                          |
-|--------------|-------------------|------------------------------------------------|
-| `id`         | UUID              | Auto-generated                                 |
-| `content`    | string (max 500)  | The atomic learning text                       |
-| `category`   | enum              | One of 6 categories                            |
-| `tags`       | string[]          | Free-form labels                               |
-| `repository` | string or null    | Repo path; null = workspace or global          |
-| `workspace`  | string or null    | Workspace path; null = repo-specific or global |
-| `group_id`   | UUID or null      | Link related learnings                         |
-| `source`     | string            | Who created this (e.g., "claude-code")         |
-| `status`     | enum              | `active` or `deprecated`                       |
-| `stale_flag` | boolean           | Agent-flagged as potentially outdated          |
-| `created_at` | ISO 8601          | Auto-set on creation                           |
-| `updated_at` | ISO 8601          | Auto-updated on modification                   |
+| Field             | Type              | Notes                                                       |
+|-------------------|-------------------|-------------------------------------------------------------|
+| `id`              | UUID              | Auto-generated                                              |
+| `content`         | string (max 500)  | The atomic learning text (sanitized on write)               |
+| `category`        | enum              | One of 6 categories                                         |
+| `tags`            | string[]          | Free-form labels                                            |
+| `repository`      | string or null    | Repo path; null = workspace or global                       |
+| `workspace`       | string or null    | Workspace path; null = repo-specific or global              |
+| `group_id`        | UUID or null      | Link related learnings                                      |
+| `source`          | string            | Who created this (e.g., "claude-code")                      |
+| `status`          | enum              | `active` or `deprecated`                                    |
+| `stale_flag`      | boolean           | Agent-flagged as potentially outdated                       |
+| `ttl_days`        | integer or null   | Per-learning TTL; overrides global `MINDKEG_DEFAULT_TTL_DAYS` |
+| `source_agent`    | string or null    | Agent name for provenance tracking                          |
+| `integrity_hash`  | string or null    | SHA-256 hash of canonical fields for tamper detection       |
+| `created_at`      | ISO 8601          | Auto-set on creation                                        |
+| `updated_at`      | ISO 8601          | Auto-updated on modification; TTL expiry anchors to this    |
 
 ## Scoping
 
@@ -326,14 +446,19 @@ Mind Keg works fully offline by default. FastEmbed provides free, local semantic
 ```
 CLI (Commander.js)
   └── init / stats / serve / api-key / migrate / export / import / dedup-scan
+      purge / encrypt-db / decrypt-db / backfill-integrity
 
 src/
   index.ts          Entry point, stdio + HTTP transports
   server.ts         MCP server + tool registration
   config.ts         Config loading (env vars → defaults)
+  audit/            Structured JSON lines audit logger
   auth/             API key generation + validation middleware
-  tools/            One file per MCP tool (9 tools)
-  services/         LearningService + EmbeddingService
+  crypto/           AES-256-GCM field encryption
+  monitoring/       Prometheus metrics + /health endpoint
+  security/         Content sanitization, integrity hashing, rate limiter
+  tools/            One file per MCP tool (9 tools) + shared tool-utils
+  services/         LearningService + EmbeddingService + PurgeService
   storage/          StorageAdapter interface + SQLite impl
   models/           Zod schemas + TypeScript types
   utils/            Logger (pino → stderr) + error classes

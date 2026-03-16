@@ -10,6 +10,8 @@ import type { LearningService } from '../services/learning-service.js';
 import type { StorageAdapter } from '../storage/storage-adapter.js';
 import { isMindKegError } from '../utils/errors.js';
 import { authenticate } from '../auth/middleware.js';
+import type { AuditLogger } from '../audit/audit-logger.js';
+import { getActorFromApiKey, recordToolMetrics } from './tool-utils.js';
 
 /**
  * Register the store_learning tool on the MCP server.
@@ -18,7 +20,8 @@ export function registerStoreLearning(
   server: McpServer,
   learningService: LearningService,
   storage: StorageAdapter,
-  getApiKey: () => string | undefined
+  getApiKey: () => string | undefined,
+  auditLogger: AuditLogger
 ): void {
   server.tool(
     'store_learning',
@@ -56,8 +59,22 @@ export function registerStoreLearning(
         .string()
         .optional()
         .describe('Who or what created this learning (e.g., "claude-code", "human"). Defaults to "agent".'),
+      source_agent: z
+        .string()
+        .optional()
+        .nullable()
+        .describe('Provenance identifier: which agent or system created this learning (ESH-AC-25). Free-form string. E.g., "claude-code-3.7", "cursor-0.45".'),
+      ttl_days: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .nullable()
+        .describe('Time-to-live in days. Learning will be automatically purged after this many days from its last update (ESH-AC-15). Null or omit for no expiration.'),
     },
     async (args) => {
+      const actor = getActorFromApiKey(getApiKey());
+      const startTime = Date.now();
       try {
         // Authenticate before executing (AC-21)
         await authenticate(getApiKey(), storage, args.repository ?? null);
@@ -70,8 +87,26 @@ export function registerStoreLearning(
           workspace: args.workspace ?? null,
           group_id: args.group_id ?? null,
           source: args.source,
+          source_agent: args.source_agent ?? null,
+          ttl_days: args.ttl_days ?? null,
         });
 
+        auditLogger.logEntry({
+          timestamp: new Date().toISOString(),
+          action: 'store_learning',
+          actor,
+          resource_id: learning.id,
+          result: 'success',
+          client: { transport: 'stdio', pid: process.pid },
+          metadata: {
+            category: args.category,
+            repository: args.repository ?? null,
+            workspace: args.workspace ?? null,
+            ttl_days: args.ttl_days ?? null,
+          },
+        });
+
+        recordToolMetrics('store_learning', 'success', Date.now() - startTime);
         return {
           content: [
             {
@@ -87,6 +122,7 @@ export function registerStoreLearning(
                   workspace: learning.workspace,
                   group_id: learning.group_id,
                   source: learning.source,
+                  source_agent: learning.source_agent,
                   status: learning.status,
                   created_at: learning.created_at,
                   embedding_generated: learning.embedding !== null,
@@ -97,6 +133,16 @@ export function registerStoreLearning(
         };
       } catch (err) {
         if (isMindKegError(err)) {
+          auditLogger.logEntry({
+            timestamp: new Date().toISOString(),
+            action: 'store_learning',
+            actor,
+            resource_id: null,
+            result: 'error',
+            error_code: err.code,
+            client: { transport: 'stdio', pid: process.pid },
+          });
+          recordToolMetrics('store_learning', 'error', Date.now() - startTime, err.code);
           return {
             isError: true,
             content: [{ type: 'text' as const, text: JSON.stringify(err.toJSON()) }],

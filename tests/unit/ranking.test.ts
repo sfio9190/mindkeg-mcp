@@ -27,6 +27,9 @@ function makeLearning(overrides: Partial<Learning> = {}): Learning {
     embedding: null,
     created_at: '2024-01-01T00:00:00.000Z',
     updated_at: '2024-01-01T00:00:00.000Z',
+    ttl_days: null,
+    source_agent: null,
+    integrity_hash: null,
     ...overrides,
   };
 }

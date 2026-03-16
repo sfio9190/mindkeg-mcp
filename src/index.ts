@@ -14,6 +14,11 @@ import type { StorageAdapter } from './storage/storage-adapter.js';
 import type { EmbeddingService } from './services/embedding-service.js';
 import { createMcpServer } from './server.js';
 import { getLogger } from './utils/logger.js';
+import { PurgeService } from './services/purge-service.js';
+import { AuditLogger } from './audit/audit-logger.js';
+import { handleHealthCheck } from './monitoring/health.js';
+import { metricsRegistry, startDefaultMetricsCollection } from './monitoring/metrics.js';
+import { RateLimiter, classifyTool } from './security/rate-limiter.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -47,6 +52,57 @@ function keyHashesMatch(a: string, b: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// TTL purge setup (ESH-AC-17)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a startup purge and schedule a periodic purge timer.
+ * Returns the timer handle so the caller can clear it on shutdown if needed.
+ */
+function setupPurge(config: Config, storage: StorageAdapter): NodeJS.Timeout | null {
+  const log = getLogger();
+  const defaultTtlDays = config.retention.defaultTtlDays;
+  const purgeIntervalHours = config.retention.purgeIntervalHours;
+  const purgeService = new PurgeService(storage);
+
+  // Startup purge: clean up expired learnings immediately on boot (ESH-AC-17)
+  try {
+    const result = purgeService.purgeExpired(defaultTtlDays);
+    if (result.count > 0) {
+      log.info({ count: result.count }, 'Startup purge: removed expired learnings');
+    }
+  } catch (err) {
+    // Non-fatal: log the error but don't prevent server from starting
+    log.warn({ error: String(err) }, 'Startup purge failed (non-fatal)');
+  }
+
+  // Periodic purge: run on configurable interval (default 24h) (ESH-AC-17)
+  const intervalMs = purgeIntervalHours * 60 * 60 * 1000;
+  const timer = setInterval(() => {
+    try {
+      const result = purgeService.purgeExpired(defaultTtlDays);
+      if (result.count > 0) {
+        log.info({ count: result.count }, 'Periodic purge: removed expired learnings');
+      }
+    } catch (err) {
+      log.warn({ error: String(err) }, 'Periodic purge failed (non-fatal)');
+    }
+  }, intervalMs);
+
+  // Allow Node.js to exit even if the timer is still pending
+  if (timer.unref) {
+    timer.unref();
+  }
+
+  log.info(
+    { purgeIntervalHours, defaultTtlDays },
+    'TTL purge scheduled'
+  );
+
+  return timer;
+}
+
+// ---------------------------------------------------------------------------
 // Stdio transport (AC-17)
 // ---------------------------------------------------------------------------
 
@@ -70,11 +126,17 @@ export async function startStdio(
     );
   }
 
+  const auditLogger = new AuditLogger(config.audit.destination);
+
   const server = createMcpServer({
     storage,
     embedding,
     getApiKey: () => apiKey,
+    auditLogger,
   });
+
+  // Setup TTL purge on startup and periodically (ESH-AC-17)
+  setupPurge(config, storage);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -103,17 +165,48 @@ export async function startHttp(
   // Map of session ID → session entry (transport + key hash for re-validation, F-01)
   const transports = new Map<string, SessionEntry>();
 
+  const auditLogger = new AuditLogger(config.audit.destination);
+
+  // Rate limiter singleton for HTTP transport (ESH-AC-28)
+  const rateLimiter = new RateLimiter(
+    config.security.rateLimitWriteRpm,
+    config.security.rateLimitReadRpm
+  );
+
+  // Start Prometheus default metrics collection (Node.js process metrics)
+  startDefaultMetricsCollection();
+
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // Only handle /mcp endpoint
     const url = req.url ?? '/';
     const basePath = '/mcp';
 
     if (!url.startsWith(basePath)) {
+      // /health endpoint (ESH-AC-20)
       if (url === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', service: 'mindkeg-mcp' }));
+        await handleHealthCheck(req, res, storage);
         return;
       }
+
+      // /metrics endpoint (ESH-AC-21)
+      if (url === '/metrics') {
+        // Optional authentication (ESH-AC-23): require API key if metricsAuth is true
+        if (config.security.metricsAuth) {
+          const authHeader = req.headers['authorization'] ?? '';
+          const requestKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+          const storedKey = config.auth.apiKey;
+          if (!storedKey || requestKey !== storedKey) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+          }
+        }
+        const metricsOutput = await metricsRegistry.metrics();
+        res.writeHead(200, { 'Content-Type': metricsRegistry.contentType });
+        res.end(metricsOutput);
+        return;
+      }
+
       res.writeHead(404);
       res.end('Not found');
       return;
@@ -143,6 +236,26 @@ export async function startHttp(
     }
 
     if (req.method === 'POST') {
+      // Rate limiting for tool calls (ESH-AC-28)
+      // Extract tool name from MCP JSON-RPC body (method: "tools/call", params.name: toolName)
+      const toolName = extractToolName(body);
+      if (toolName !== null) {
+        const keyPrefix = apiKey ? apiKey.slice(0, 8) : 'anonymous';
+        const bucketType = classifyTool(toolName);
+        const rateResult = rateLimiter.consume(keyPrefix, bucketType);
+        if (!rateResult.allowed) {
+          res.writeHead(429, {
+            'Content-Type': 'application/json',
+            'Retry-After': String(rateResult.retryAfterSeconds),
+          });
+          res.end(JSON.stringify({
+            error: 'Rate limit exceeded',
+            retryAfterSeconds: rateResult.retryAfterSeconds,
+          }));
+          return;
+        }
+      }
+
       let transport: StreamableHTTPServerTransport;
 
       if (sessionId && transports.has(sessionId)) {
@@ -181,6 +294,7 @@ export async function startHttp(
           storage,
           embedding,
           getApiKey: () => sessionApiKey,
+          auditLogger,
         });
 
         await server.connect(transport);
@@ -216,6 +330,9 @@ export async function startHttp(
     }
   });
 
+  // Setup TTL purge on startup and periodically (ESH-AC-17)
+  setupPurge(config, storage);
+
   await new Promise<void>((resolve, reject) => {
     httpServer.listen(port, host, () => {
       log.info(
@@ -226,6 +343,29 @@ export async function startHttp(
     });
     httpServer.on('error', reject);
   });
+}
+
+/**
+ * Extract the MCP tool name from a JSON-RPC request body.
+ * MCP tool calls have method "tools/call" and params.name = toolName.
+ * Returns null if the body is not a tool call or cannot be parsed.
+ * Used for rate limiting (ESH-AC-28).
+ */
+function extractToolName(body: unknown): string | null {
+  if (
+    body !== null &&
+    typeof body === 'object' &&
+    !Array.isArray(body)
+  ) {
+    const obj = body as Record<string, unknown>;
+    if (obj['method'] === 'tools/call' && obj['params'] !== null && typeof obj['params'] === 'object') {
+      const params = obj['params'] as Record<string, unknown>;
+      if (typeof params['name'] === 'string') {
+        return params['name'];
+      }
+    }
+  }
+  return null;
 }
 
 /**

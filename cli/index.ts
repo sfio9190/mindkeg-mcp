@@ -13,11 +13,15 @@ import { registerImportCommand } from './commands/import.js';
 import { registerInitCommand } from './commands/init.js';
 import { registerStatsCommand } from './commands/stats.js';
 import { registerDedupScanCommand } from './commands/dedup-scan.js';
+import { registerPurgeCommand } from './commands/purge.js';
+import { registerEncryptDbCommand } from './commands/encrypt-db.js';
+import { registerDecryptDbCommand } from './commands/decrypt-db.js';
+import { registerBackfillIntegrityCommand } from './commands/backfill-integrity.js';
 
 program
   .name('mindkeg')
   .description('Mind Keg MCP — persistent memory for AI coding agents')
-  .version('0.3.0');
+  .version('0.4.0');
 
 registerServeCommand(program);
 registerApiKeyCommand(program);
@@ -27,6 +31,10 @@ registerImportCommand(program);
 registerInitCommand(program);
 registerStatsCommand(program);
 registerDedupScanCommand(program);
+registerPurgeCommand(program);
+registerEncryptDbCommand(program);
+registerDecryptDbCommand(program);
+registerBackfillIntegrityCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error('Fatal error:', err instanceof Error ? err.message : String(err));

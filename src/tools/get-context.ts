@@ -10,6 +10,8 @@ import type { LearningService } from '../services/learning-service.js';
 import type { StorageAdapter } from '../storage/storage-adapter.js';
 import { isMindKegError } from '../utils/errors.js';
 import { authenticate } from '../auth/middleware.js';
+import type { AuditLogger } from '../audit/audit-logger.js';
+import { getActorFromApiKey, recordToolMetrics } from './tool-utils.js';
 
 /**
  * Register the get_context tool on the MCP server.
@@ -20,7 +22,8 @@ export function registerGetContext(
   server: McpServer,
   learningService: LearningService,
   storage: StorageAdapter,
-  getApiKey: () => string | undefined
+  getApiKey: () => string | undefined,
+  auditLogger: AuditLogger
 ): void {
   server.tool(
     'get_context',
@@ -60,8 +63,15 @@ export function registerGetContext(
         .describe(
           'When true (default), stale-flagged learnings are included in stale_review for agent inspection.'
         ),
+      verify_integrity: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('When true, each returned learning includes integrity_valid: boolean indicating whether the stored hash matches the computed hash (ESH-AC-27).'),
     },
     async (args) => {
+      const actor = getActorFromApiKey(getApiKey());
+      const startTime = Date.now();
       try {
         // Authenticate via existing middleware (GC-AC-29, GC-AC-30)
         await authenticate(getApiKey(), storage, args.repository ?? null);
@@ -73,8 +83,24 @@ export function registerGetContext(
           query: args.query,
           budget: args.budget,
           include_stale: args.include_stale,
+          verify_integrity: args.verify_integrity,
         });
 
+        auditLogger.logEntry({
+          timestamp: new Date().toISOString(),
+          action: 'get_context',
+          actor,
+          resource_id: null,
+          result: 'success',
+          client: { transport: 'stdio', pid: process.pid },
+          metadata: {
+            repository: args.repository,
+            budget: args.budget ?? 'standard',
+            verify_integrity: args.verify_integrity,
+          },
+        });
+
+        recordToolMetrics('get_context', 'success', Date.now() - startTime);
         return {
           content: [
             {
@@ -85,6 +111,16 @@ export function registerGetContext(
         };
       } catch (err) {
         if (isMindKegError(err)) {
+          auditLogger.logEntry({
+            timestamp: new Date().toISOString(),
+            action: 'get_context',
+            actor,
+            resource_id: null,
+            result: 'error',
+            error_code: err.code,
+            client: { transport: 'stdio', pid: process.pid },
+          });
+          recordToolMetrics('get_context', 'error', Date.now() - startTime, err.code);
           return {
             isError: true,
             content: [{ type: 'text' as const, text: JSON.stringify(err.toJSON()) }],

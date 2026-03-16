@@ -10,6 +10,8 @@ import type { LearningService } from '../services/learning-service.js';
 import type { StorageAdapter } from '../storage/storage-adapter.js';
 import { isMindKegError } from '../utils/errors.js';
 import { authenticate } from '../auth/middleware.js';
+import type { AuditLogger } from '../audit/audit-logger.js';
+import { getActorFromApiKey, recordToolMetrics } from './tool-utils.js';
 
 /**
  * Register the search_learnings tool on the MCP server.
@@ -18,7 +20,8 @@ export function registerSearchLearnings(
   server: McpServer,
   learningService: LearningService,
   storage: StorageAdapter,
-  getApiKey: () => string | undefined
+  getApiKey: () => string | undefined,
+  auditLogger: AuditLogger
 ): void {
   server.tool(
     'search_learnings',
@@ -59,8 +62,15 @@ export function registerSearchLearnings(
         .optional()
         .default(false)
         .describe('Include deprecated learnings in results (default false).'),
+      verify_integrity: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('When true, each result includes integrity_valid: boolean indicating whether the stored hash matches the computed hash (ESH-AC-27). Adds minor overhead.'),
     },
     async (args) => {
+      const actor = getActorFromApiKey(getApiKey());
+      const startTime = Date.now();
       try {
         // Authenticate — repository access check uses the filter repo if provided (AC-21)
         await authenticate(getApiKey(), storage, args.repository ?? null);
@@ -73,8 +83,26 @@ export function registerSearchLearnings(
           tags: args.tags,
           limit: args.limit,
           include_deprecated: args.include_deprecated,
+          verify_integrity: args.verify_integrity,
         });
 
+        auditLogger.logEntry({
+          timestamp: new Date().toISOString(),
+          action: 'search_learnings',
+          actor,
+          resource_id: null,
+          result: 'success',
+          client: { transport: 'stdio', pid: process.pid },
+          metadata: {
+            repository: args.repository ?? null,
+            workspace: args.workspace ?? null,
+            category: args.category ?? null,
+            result_count: results.length,
+            verify_integrity: args.verify_integrity,
+          },
+        });
+
+        recordToolMetrics('search_learnings', 'success', Date.now() - startTime);
         // Return results with relevance scores (AC-12) and scope (WS-AC-14)
         const output = results.map((r) => ({
           id: r.id,
@@ -86,11 +114,15 @@ export function registerSearchLearnings(
           scope: r.scope,
           group_id: r.group_id,
           source: r.source,
+          source_agent: r.source_agent,
           status: r.status,
           stale_flag: r.stale_flag,
           score: r.score,
           created_at: r.created_at,
           updated_at: r.updated_at,
+          ...(args.verify_integrity && 'integrity_valid' in r
+            ? { integrity_valid: r.integrity_valid }
+            : {}),
         }));
 
         return {
@@ -107,6 +139,16 @@ export function registerSearchLearnings(
         };
       } catch (err) {
         if (isMindKegError(err)) {
+          auditLogger.logEntry({
+            timestamp: new Date().toISOString(),
+            action: 'search_learnings',
+            actor,
+            resource_id: null,
+            result: 'error',
+            error_code: err.code,
+            client: { transport: 'stdio', pid: process.pid },
+          });
+          recordToolMetrics('search_learnings', 'error', Date.now() - startTime, err.code);
           return {
             isError: true,
             content: [{ type: 'text' as const, text: JSON.stringify(err.toJSON()) }],

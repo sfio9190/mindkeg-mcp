@@ -13,12 +13,14 @@ import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { encrypt, decrypt, isEncrypted } from '../crypto/encryption.js';
 import type {
   StorageAdapter,
   CreateLearningRecord,
   UpdateLearningRecord,
   SearchFilters,
   ListAllFilters,
+  PurgeByFilterOptions,
   CreateApiKeyRecord,
   ApiKeyRecord,
   LearningStats,
@@ -38,6 +40,10 @@ import {
   upStatements as migration002Statements,
   version as migration002Version,
 } from './migrations/002-duplicate-candidates.js';
+import {
+  upStatements as migration003Statements,
+  version as migration003Version,
+} from './migrations/003-ttl-and-provenance.js';
 
 // ---------------------------------------------------------------------------
 // node:sqlite loader — lazy to avoid Vite/tsup resolution issues
@@ -98,9 +104,34 @@ export const DUPLICATE_SIMILARITY_THRESHOLD = 0.92;
 export class SqliteAdapter implements StorageAdapter {
   private db!: DatabaseSyncInstance;
   private readonly dbPath: string;
+  /**
+   * Optional AES-256-GCM encryption key (32 bytes).
+   * When set, content and embedding fields are encrypted at rest (ESH-AC-1, ESH-AC-2).
+   * When null, fields are stored as plaintext (ESH-AC-3 — no performance penalty).
+   */
+  private readonly encryptionKey: Buffer | null;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, encryptionKey?: Buffer | null) {
     this.dbPath = dbPath;
+    this.encryptionKey = encryptionKey ?? null;
+  }
+
+  /** Encrypt a string value if encryption is enabled, otherwise return as-is. */
+  private encryptField(value: string): string {
+    if (this.encryptionKey === null) return value;
+    return encrypt(value, this.encryptionKey);
+  }
+
+  /** Decrypt a string value if it appears encrypted and encryption is enabled, otherwise return as-is. */
+  private decryptField(value: string): string {
+    if (this.encryptionKey === null) return value;
+    if (!isEncrypted(value)) return value; // Handle plaintext values (e.g., during migration)
+    return decrypt(value, this.encryptionKey);
+  }
+
+  /** Convert a raw DB row to a Learning, applying decryption if key is configured. */
+  private tolearning(row: RawLearningRow): Learning {
+    return rowToLearning(row, this.encryptionKey !== null ? (v) => this.decryptField(v) : undefined);
   }
 
   async initialize(): Promise<void> {
@@ -184,6 +215,25 @@ export class SqliteAdapter implements StorageAdapter {
         .run(migration002Version);
       log.info({ migration: migration002Version }, 'Migration 002-duplicate-candidates applied');
     }
+
+    if (currentVersion < migration003Version) {
+      log.info({ migration: migration003Version }, 'Applying migration 003-ttl-and-provenance');
+      for (const stmt of migration003Statements) {
+        try {
+          this.db.exec(stmt + ';');
+        } catch (err) {
+          const msg = String(err);
+          // ALTER TABLE ADD COLUMN will error with "duplicate column name" if already applied
+          if (!msg.includes('already exists') && !msg.includes('duplicate column name')) {
+            throw new StorageError(`Migration failed on statement: ${stmt}\n${msg}`, err);
+          }
+        }
+      }
+      this.db
+        .prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)')
+        .run(migration003Version);
+      log.info({ migration: migration003Version }, 'Migration 003-ttl-and-provenance applied');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -193,27 +243,33 @@ export class SqliteAdapter implements StorageAdapter {
   async createLearning(record: CreateLearningRecord): Promise<Learning> {
     const now = new Date().toISOString();
     const tagsJson = JSON.stringify(record.tags);
+    // Encrypt content and embedding if key is configured (ESH-AC-2)
+    const storedContent = this.encryptField(record.content);
     const embeddingJson = record.embedding ? JSON.stringify(record.embedding) : null;
+    const storedEmbedding = embeddingJson !== null ? this.encryptField(embeddingJson) : null;
 
     try {
       this.db
         .prepare(
           `INSERT INTO learnings
-           (id, content, category, tags, repository, workspace, group_id, source, status, stale_flag, embedding, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?)`
+           (id, content, category, tags, repository, workspace, group_id, source, status, stale_flag, embedding, created_at, updated_at, ttl_days, source_agent, integrity_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           record.id,
-          record.content,
+          storedContent,
           record.category,
           tagsJson,
           record.repository ?? null,
           record.workspace ?? null,
           record.group_id ?? null,
           record.source,
-          embeddingJson,
+          storedEmbedding,
           now,
-          now
+          now,
+          record.ttl_days ?? null,
+          record.source_agent ?? null,
+          record.integrity_hash ?? null
         );
 
       const learning = this.getLearningSync(record.id);
@@ -239,7 +295,7 @@ export class SqliteAdapter implements StorageAdapter {
     const row = this.db
       .prepare('SELECT * FROM learnings WHERE id = ?')
       .get(id) as RawLearningRow | undefined;
-    return row ? rowToLearning(row) : null;
+    return row ? this.tolearning(row) : null;
   }
 
   async updateLearning(id: string, updates: UpdateLearningRecord): Promise<Learning | null> {
@@ -251,7 +307,8 @@ export class SqliteAdapter implements StorageAdapter {
 
     if (updates.content !== undefined) {
       setClauses.push('content = ?');
-      params.push(updates.content);
+      // Encrypt on write if key is configured (ESH-AC-2)
+      params.push(this.encryptField(updates.content));
     }
     if (updates.category !== undefined) {
       setClauses.push('category = ?');
@@ -275,7 +332,9 @@ export class SqliteAdapter implements StorageAdapter {
     }
     if (updates.embedding !== undefined) {
       setClauses.push('embedding = ?');
-      params.push(updates.embedding !== null ? JSON.stringify(updates.embedding) : null);
+      const embJson = updates.embedding !== null ? JSON.stringify(updates.embedding) : null;
+      // Encrypt on write if key is configured (ESH-AC-2)
+      params.push(embJson !== null ? this.encryptField(embJson) : null);
     }
     if (updates.workspace !== undefined) {
       setClauses.push('workspace = ?');
@@ -284,6 +343,18 @@ export class SqliteAdapter implements StorageAdapter {
     if (updates.repository !== undefined) {
       setClauses.push('repository = ?');
       params.push(updates.repository ?? null);
+    }
+    if (updates.ttl_days !== undefined) {
+      setClauses.push('ttl_days = ?');
+      params.push(updates.ttl_days ?? null);
+    }
+    if (updates.source_agent !== undefined) {
+      setClauses.push('source_agent = ?');
+      params.push(updates.source_agent ?? null);
+    }
+    if (updates.integrity_hash !== undefined) {
+      setClauses.push('integrity_hash = ?');
+      params.push(updates.integrity_hash ?? null);
     }
 
     params.push(id);
@@ -306,6 +377,86 @@ export class SqliteAdapter implements StorageAdapter {
       return result.changes > 0;
     } catch (err) {
       throw new StorageError(`Failed to delete learning: ${String(err)}`, err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Purge (ESH-AC-17, ESH-AC-18)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Purge learnings that have exceeded their TTL.
+   * Synchronous — matches node:sqlite DatabaseSync pattern (ESH-AC-17).
+   */
+  purgeExpired(defaultTtlDays: number | null): number {
+    try {
+      let totalChanges = 0;
+
+      // Purge learnings that have an explicit per-learning ttl_days set
+      const perLearningResult = this.db
+        .prepare(
+          `DELETE FROM learnings
+           WHERE ttl_days IS NOT NULL
+             AND (julianday('now') - julianday(updated_at)) > ttl_days`
+        )
+        .run();
+      totalChanges += perLearningResult.changes;
+
+      // If a global default TTL is configured, purge learnings with no explicit ttl_days
+      if (defaultTtlDays !== null) {
+        const globalResult = this.db
+          .prepare(
+            `DELETE FROM learnings
+             WHERE ttl_days IS NULL
+               AND (julianday('now') - julianday(updated_at)) > ?`
+          )
+          .run(defaultTtlDays);
+        totalChanges += globalResult.changes;
+      }
+
+      return totalChanges;
+    } catch (err) {
+      throw new StorageError(`Failed to purge expired learnings: ${String(err)}`, err);
+    }
+  }
+
+  /**
+   * Purge learnings matching the given filter criteria.
+   * Synchronous — matches node:sqlite DatabaseSync pattern (ESH-AC-18).
+   */
+  purgeByFilter(options: PurgeByFilterOptions): number {
+    try {
+      if (options.all) {
+        const result = this.db.prepare('DELETE FROM learnings').run();
+        return result.changes;
+      }
+
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+
+      if (options.olderThanDays !== undefined) {
+        conditions.push(`(julianday('now') - julianday(updated_at)) > ?`);
+        params.push(options.olderThanDays);
+      }
+      if (options.repository !== undefined) {
+        conditions.push('repository = ?');
+        params.push(options.repository);
+      }
+      if (options.workspace !== undefined) {
+        conditions.push('workspace = ?');
+        params.push(options.workspace);
+      }
+
+      if (conditions.length === 0) {
+        // No filters — refuse to purge everything without explicit `all: true`
+        return 0;
+      }
+
+      const sql = `DELETE FROM learnings WHERE ${conditions.join(' AND ')}`;
+      const result = this.db.prepare(sql).run(...params);
+      return result.changes;
+    } catch (err) {
+      throw new StorageError(`Failed to purge learnings by filter: ${String(err)}`, err);
     }
   }
 
@@ -345,7 +496,7 @@ export class SqliteAdapter implements StorageAdapter {
 
       const sql = `SELECT * FROM learnings ${whereClause} ORDER BY created_at ASC ${limitClause} ${offsetClause}`;
       const rows = this.db.prepare(sql).all(...params) as RawLearningRow[];
-      return rows.map(rowToLearning);
+      return rows.map((r) => this.tolearning(r));
     } catch (err) {
       throw new StorageError(`Failed to list all learnings: ${String(err)}`, err);
     }
@@ -376,7 +527,7 @@ export class SqliteAdapter implements StorageAdapter {
       >;
 
       return rows.map((row) => {
-        const learning = rowToLearning(row);
+        const learning = this.tolearning(row);
         return {
           ...learning,
           score: normalizeBm25Score(row.fts_score),
@@ -411,12 +562,14 @@ export class SqliteAdapter implements StorageAdapter {
 
       const scored = rows
         .map((row) => {
-          const embedding = row.embedding
-            ? (JSON.parse(row.embedding) as number[])
+          // Decrypt embedding before parsing (ESH-AC-2/3)
+          const embeddingRaw = row.embedding
+            ? (this.encryptionKey !== null ? this.decryptField(row.embedding) : row.embedding)
             : null;
+          const embedding = embeddingRaw ? (JSON.parse(embeddingRaw) as number[]) : null;
           if (!embedding) return null;
           const score = cosineSimilarity(queryEmbedding, embedding);
-          const learning = rowToLearning(row);
+          const learning = this.tolearning(row);
           return { ...learning, score, scope: annotateScope(learning) };
         })
         .filter((r): r is LearningWithScore => r !== null)
@@ -716,10 +869,10 @@ export class SqliteAdapter implements StorageAdapter {
           : '';
 
       return {
-        repo: repoRows.map(rowToLearning),
-        workspace: wsRows.map(rowToLearning),
-        global: globalRows.map(rowToLearning),
-        stale: staleRows.map(rowToLearning),
+        repo: repoRows.map((r) => this.tolearning(r)),
+        workspace: wsRows.map((r) => this.tolearning(r)),
+        global: globalRows.map((r) => this.tolearning(r)),
+        stale: staleRows.map((r) => this.tolearning(r)),
         summary: {
           total_repo: totalRepoRow.cnt,
           total_workspace: totalWsRow.cnt,
@@ -817,7 +970,11 @@ export class SqliteAdapter implements StorageAdapter {
       // Compare against each candidate and store pairs above threshold
       for (const candidate of candidates) {
         if (!candidate.embedding) continue;
-        const candidateEmbedding = JSON.parse(candidate.embedding) as number[];
+        // Decrypt embedding before parsing if key is configured (ESH-AC-2/3)
+        const embeddingRaw = this.encryptionKey !== null
+          ? this.decryptField(candidate.embedding)
+          : candidate.embedding;
+        const candidateEmbedding = JSON.parse(embeddingRaw) as number[];
         const similarity = cosineSimilarity(embedding, candidateEmbedding);
 
         if (similarity >= DUPLICATE_SIMILARITY_THRESHOLD) {
@@ -879,6 +1036,12 @@ interface RawLearningRow {
   embedding: string | null;
   created_at: string;
   updated_at: string;
+  /** Per-learning TTL in days (ESH-AC-15). NULL if not set. */
+  ttl_days: number | null;
+  /** Free-form provenance string (ESH-AC-25). NULL if not set. */
+  source_agent: string | null;
+  /** SHA-256 integrity hash (ESH-AC-26). NULL for legacy rows. */
+  integrity_hash: string | null;
 }
 
 interface RawApiKeyRow {
@@ -906,10 +1069,22 @@ interface RawDuplicateCandidateRow {
 // Row mapping helpers
 // ---------------------------------------------------------------------------
 
-function rowToLearning(row: RawLearningRow): Learning {
+/**
+ * Map a raw database row to a Learning entity.
+ * @param row - Raw row from SQLite
+ * @param decryptFn - Optional decryption function for content/embedding fields (ESH-AC-2, ESH-AC-3)
+ */
+function rowToLearning(
+  row: RawLearningRow,
+  decryptFn?: (value: string) => string
+): Learning {
+  const contentRaw = decryptFn ? decryptFn(row.content) : row.content;
+  const embeddingRaw = row.embedding
+    ? (decryptFn ? decryptFn(row.embedding) : row.embedding)
+    : null;
   return {
     id: row.id,
-    content: row.content,
+    content: contentRaw,
     category: row.category as Learning['category'],
     tags: JSON.parse(row.tags) as string[],
     repository: row.repository,
@@ -918,9 +1093,12 @@ function rowToLearning(row: RawLearningRow): Learning {
     source: row.source,
     status: row.status as Learning['status'],
     stale_flag: row.stale_flag === 1,
-    embedding: row.embedding ? (JSON.parse(row.embedding) as number[]) : null,
+    embedding: embeddingRaw ? (JSON.parse(embeddingRaw) as number[]) : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    ttl_days: row.ttl_days ?? null,
+    source_agent: row.source_agent ?? null,
+    integrity_hash: row.integrity_hash ?? null,
   };
 }
 

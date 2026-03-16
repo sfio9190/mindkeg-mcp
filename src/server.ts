@@ -15,12 +15,19 @@ import { registerListRepositories } from './tools/list-repositories.js';
 import { registerFlagStale } from './tools/flag-stale.js';
 import { registerListWorkspaces } from './tools/list-workspaces.js';
 import { registerGetContext } from './tools/get-context.js';
+import type { AuditLogger } from './audit/audit-logger.js';
+import { createNoopAuditLogger } from './audit/audit-logger.js';
 
 export interface ServerDependencies {
   storage: StorageAdapter;
   embedding: EmbeddingService;
   /** Callback to retrieve the current API key (e.g., from env or HTTP header). */
   getApiKey: () => string | undefined;
+  /**
+   * Audit logger for structured audit trail. (ESH-AC-5)
+   * Defaults to no-op logger if not provided.
+   */
+  auditLogger?: AuditLogger;
 }
 
 /**
@@ -41,17 +48,18 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
   );
 
   const learningService = new LearningService(deps.storage, deps.embedding);
+  const auditLogger = deps.auditLogger ?? createNoopAuditLogger();
 
   // Register all 9 MCP tools (AC-16, AC-30, WS-AC-16, GC-AC-1)
-  registerStoreLearning(server, learningService, deps.storage, deps.getApiKey);
-  registerSearchLearnings(server, learningService, deps.storage, deps.getApiKey);
-  registerUpdateLearning(server, learningService, deps.storage, deps.getApiKey);
-  registerDeprecateLearning(server, learningService, deps.storage, deps.getApiKey);
-  registerDeleteLearning(server, learningService, deps.storage, deps.getApiKey);
-  registerListRepositories(server, learningService, deps.storage, deps.getApiKey);
-  registerFlagStale(server, learningService, deps.storage, deps.getApiKey);
-  registerListWorkspaces(server, learningService);
-  registerGetContext(server, learningService, deps.storage, deps.getApiKey);
+  registerStoreLearning(server, learningService, deps.storage, deps.getApiKey, auditLogger);
+  registerSearchLearnings(server, learningService, deps.storage, deps.getApiKey, auditLogger);
+  registerUpdateLearning(server, learningService, deps.storage, deps.getApiKey, auditLogger);
+  registerDeprecateLearning(server, learningService, deps.storage, deps.getApiKey, auditLogger);
+  registerDeleteLearning(server, learningService, deps.storage, deps.getApiKey, auditLogger);
+  registerListRepositories(server, learningService, deps.storage, deps.getApiKey, auditLogger);
+  registerFlagStale(server, learningService, deps.storage, deps.getApiKey, auditLogger);
+  registerListWorkspaces(server, learningService, auditLogger);
+  registerGetContext(server, learningService, deps.storage, deps.getApiKey, auditLogger);
 
   return server;
 }

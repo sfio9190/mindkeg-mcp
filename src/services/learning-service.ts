@@ -30,6 +30,7 @@ import { applyBudget } from './budget.js';
 import type { BudgetPreset } from './budget.js';
 import { cosineSimilarity } from '../storage/sqlite-adapter.js';
 import type { DuplicateCandidate } from '../storage/storage-adapter.js';
+import { computeIntegrityHash, verifyIntegrityHash } from '../security/integrity.js';
 import type { z } from 'zod';
 
 /** Raw input type for storeLearning (pre-validation). */
@@ -117,6 +118,15 @@ export class LearningService {
       input.repository != null ? input.repository.replace(/\\/g, '/') : null;
     const normalizedWorkspace = input.workspace != null ? normalizePath(input.workspace) : null;
 
+    // Compute integrity hash (ESH-AC-26) — covers human-authored fields before storage
+    const integrityHash = computeIntegrityHash({
+      content: input.content,
+      category: input.category,
+      tags: input.tags,
+      repository: normalizedRepository,
+      workspace: normalizedWorkspace,
+    });
+
     const id = randomUUID();
     const learning = await this.storage.createLearning({
       id,
@@ -128,6 +138,9 @@ export class LearningService {
       group_id: input.group_id,
       source: input.source,
       embedding: embeddingVector,
+      integrity_hash: integrityHash,
+      source_agent: input.source_agent,
+      ttl_days: input.ttl_days,
     });
 
     // 4. Duplicate detection: compare against same-scope learnings (GC-AC-25).
@@ -215,10 +228,13 @@ export class LearningService {
       results = await this.storage.searchByText(input.query, filters);
     }
 
-    // Annotate each result with its scope (WS-AC-14)
+    // Annotate each result with its scope (WS-AC-14) and optional integrity check (ESH-AC-27)
     return results.map((r) => ({
       ...r,
       scope: annotateScope(r),
+      ...(input.verify_integrity
+        ? { integrity_valid: verifyIntegrityHash(r) }
+        : {}),
     }));
   }
 
@@ -250,6 +266,27 @@ export class LearningService {
       newEmbedding = await this.embedding.generateEmbedding(input.content);
     }
 
+    // Recompute integrity hash if any canonical field changed (ESH-AC-26)
+    const finalContent = input.content ?? existing.content;
+    const finalCategory = input.category ?? existing.category;
+    const finalTags = input.tags ?? existing.tags;
+    const finalRepository =
+      input.repository !== undefined
+        ? (input.repository != null ? input.repository.replace(/\\/g, '/') : null)
+        : existing.repository;
+    const finalWorkspace =
+      input.workspace !== undefined
+        ? (input.workspace != null ? normalizePath(input.workspace) : null)
+        : existing.workspace;
+
+    const newIntegrityHash = computeIntegrityHash({
+      content: finalContent,
+      category: finalCategory,
+      tags: finalTags,
+      repository: finalRepository,
+      workspace: finalWorkspace,
+    });
+
     const updates: Parameters<StorageAdapter['updateLearning']>[1] = {
       ...(input.content !== undefined ? { content: input.content } : {}),
       ...(input.category !== undefined ? { category: input.category } : {}),
@@ -258,6 +295,9 @@ export class LearningService {
       ...(newEmbedding !== undefined ? { embedding: newEmbedding } : {}),
       ...(input.workspace !== undefined ? { workspace: input.workspace } : {}),
       ...(input.repository !== undefined ? { repository: input.repository } : {}),
+      ...(input.source_agent !== undefined ? { source_agent: input.source_agent } : {}),
+      ...(input.ttl_days !== undefined ? { ttl_days: input.ttl_days } : {}),
+      integrity_hash: newIntegrityHash,
     };
 
     const updated = await this.storage.updateLearning(input.id, updates);
@@ -552,6 +592,13 @@ export class LearningService {
       stale_flag: l.stale_flag,
       created_at: l.created_at,
       updated_at: l.updated_at,
+      ttl_days: l.ttl_days,
+      source_agent: l.source_agent,
+      integrity_hash: l.integrity_hash,
+      // Opt-in integrity verification (ESH-AC-27)
+      ...(input.verify_integrity
+        ? { integrity_valid: verifyIntegrityHash(l) }
+        : {}),
     });
 
     const result: GetContextResult = {

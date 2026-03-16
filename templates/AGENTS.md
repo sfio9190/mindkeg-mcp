@@ -92,9 +92,14 @@ Use `repository` for repo-specific learnings, `workspace` for workspace-wide lea
   "category": "gotchas",
   "tags": ["prisma", "error-handling"],
   "repository": "/path/to/current/repo",
-  "source": "your-agent-name"
+  "source": "your-agent-name",
+  "source_agent": "your-agent-name"
 }
 ```
+
+**Optional parameters:**
+- `source_agent`: Your agent name (e.g., `"claude-code"`, `"cursor"`). Used for provenance tracking — records which agent authored the learning.
+- `ttl_days`: Integer. Per-learning time-to-live in days. Overrides the global `MINDKEG_DEFAULT_TTL_DAYS` setting. Omit for no per-learning expiry.
 
 Workspace-scoped example (applies to all repos under `/path/to/workspace/`):
 
@@ -104,7 +109,9 @@ Workspace-scoped example (applies to all repos under `/path/to/workspace/`):
   "category": "conventions",
   "tags": ["auth", "oauth"],
   "workspace": "/path/to/workspace/",
-  "source": "your-agent-name"
+  "source": "your-agent-name",
+  "source_agent": "your-agent-name",
+  "ttl_days": 365
 }
 ```
 
@@ -128,6 +135,9 @@ Search for relevant learnings. Each scope requires its own search call:
 { "query": "how to handle database migrations" }
 ```
 
+**Optional parameter:**
+- `verify_integrity`: Boolean (default `false`). When `true`, each result includes an `integrity_valid` field: `true` (hash matches), `false` (content may have been tampered), or `null` (legacy learning with no stored hash). Use this when you suspect memory poisoning or database corruption.
+
 ### update_learning
 
 Update an existing learning's content, category, or tags.
@@ -136,9 +146,13 @@ Update an existing learning's content, category, or tags.
 {
   "id": "uuid-of-the-learning",
   "content": "Updated content here.",
-  "tags": ["updated", "tags"]
+  "tags": ["updated", "tags"],
+  "source_agent": "your-agent-name"
 }
 ```
+
+**Optional parameter:**
+- `source_agent`: Your agent name. Records which agent last updated the learning for provenance tracking.
 
 ### deprecate_learning
 
@@ -200,6 +214,9 @@ Prime an agent session with all relevant learnings for the current repository in
   "budget": "standard"
 }
 ```
+
+**Optional parameter:**
+- `verify_integrity`: Boolean (default `false`). When `true`, each returned learning includes `integrity_valid`: `true` (hash matches), `false` (possible tampering), or `null` (legacy learning). Useful for security-conscious sessions or after a database migration.
 
 Response sections:
 - `repo_learnings`: Repo-scoped learnings (ranked: gotchas → conventions → decisions → dependencies)

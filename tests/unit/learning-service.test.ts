@@ -32,6 +32,9 @@ function makeLearning(overrides: Partial<Learning> = {}): Learning {
     embedding: null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    ttl_days: null,
+    source_agent: null,
+    integrity_hash: null,
     ...overrides,
   };
 }
@@ -59,6 +62,8 @@ function makeMockStorage(overrides: Partial<StorageAdapter> = {}): StorageAdapte
     getDuplicateCandidates: vi.fn().mockResolvedValue([]),
     checkAndStoreDuplicates: vi.fn().mockResolvedValue(undefined),
     cleanupDuplicateCandidates: vi.fn().mockResolvedValue(undefined),
+    purgeExpired: vi.fn().mockReturnValue(0),
+    purgeByFilter: vi.fn().mockReturnValue(0),
     ...overrides,
   };
 }
@@ -422,5 +427,66 @@ describe('LearningService.listRepositories', () => {
     const result = await service.listRepositories();
     expect(result).toEqual(repos);
     expect(storage.listRepositories).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// searchLearnings: verify_integrity (ESH-AC-27)
+// ---------------------------------------------------------------------------
+describe('LearningService.searchLearnings — verify_integrity (ESH-AC-27)', () => {
+  let storage: StorageAdapter;
+  let service: LearningService;
+
+  beforeEach(() => {
+    storage = makeMockStorage();
+    service = new LearningService(storage, makeMockEmbedding());
+  });
+
+  it('does not annotate integrity_valid when verify_integrity is false (default)', async () => {
+    const learning = makeLearning({ integrity_hash: null });
+    storage.searchByText = vi.fn().mockResolvedValue([{ ...learning, score: 1 }]);
+    const results = await service.searchLearnings({ query: 'test' });
+    expect(results[0]).not.toHaveProperty('integrity_valid');
+  });
+
+  it('annotates integrity_valid: null for legacy learnings with null integrity_hash', async () => {
+    const learning = makeLearning({ integrity_hash: null });
+    storage.searchByText = vi.fn().mockResolvedValue([{ ...learning, score: 1 }]);
+    const results = await service.searchLearnings({ query: 'test', verify_integrity: true });
+    expect(results[0]).toHaveProperty('integrity_valid', null);
+  });
+
+  it('annotates integrity_valid: true when hash matches', async () => {
+    const { computeIntegrityHash } = await import('../../src/security/integrity.js');
+    const learning = makeLearning({ repository: '/repo/test', tags: ['node'] });
+    const hash = computeIntegrityHash({
+      content: learning.content,
+      category: learning.category,
+      tags: learning.tags,
+      repository: learning.repository,
+      workspace: learning.workspace,
+    });
+    const learningWithHash = { ...learning, integrity_hash: hash };
+    storage.searchByText = vi.fn().mockResolvedValue([{ ...learningWithHash, score: 1 }]);
+    const results = await service.searchLearnings({ query: 'test', verify_integrity: true });
+    expect(results[0]).toHaveProperty('integrity_valid', true);
+  });
+
+  it('annotates integrity_valid: false when content was tampered', async () => {
+    const learning = makeLearning({ repository: '/repo/test', tags: [] });
+    // Store a hash computed from different content
+    const { computeIntegrityHash } = await import('../../src/security/integrity.js');
+    const originalHash = computeIntegrityHash({
+      content: 'original content',
+      category: learning.category,
+      tags: learning.tags,
+      repository: learning.repository,
+      workspace: learning.workspace,
+    });
+    // Return a learning where content differs from what the hash was computed from
+    const tampered = { ...learning, content: 'tampered content', integrity_hash: originalHash };
+    storage.searchByText = vi.fn().mockResolvedValue([{ ...tampered, score: 1 }]);
+    const results = await service.searchLearnings({ query: 'test', verify_integrity: true });
+    expect(results[0]).toHaveProperty('integrity_valid', false);
   });
 });

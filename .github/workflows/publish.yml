@@ -8,8 +8,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write
+      contents: write      # upload release assets
+      id-token: write      # npm provenance attestation + cosign keyless signing
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,59 @@ jobs:
       - name: Build
         run: npm run build
 
+      # ESH-AC-12: Generate CycloneDX SBOM
+      - name: Generate SBOM
+        run: npm run sbom
+
+      # ESH-AC-12: Upload SBOM as release asset
+      - name: Upload SBOM as release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./sbom.json
+          asset_name: mindkeg-mcp-${{ github.event.release.tag_name }}-sbom.json
+          asset_content_type: application/json
+
+      # Publish to npm with provenance attestation (ESH-AC-13)
       - name: Publish
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ESH-AC-30: Sign npm tarball with Sigstore cosign (keyless, OIDC-based)
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Pack tarball for signing
+        run: npm pack
+
+      - name: Sign tarball with cosign
+        run: |
+          TARBALL=$(ls mindkeg-mcp-*.tgz)
+          cosign sign-blob --yes "${TARBALL}" \
+            --bundle "${TARBALL}.bundle" \
+            --output-signature "${TARBALL}.sig"
+          echo "TARBALL=${TARBALL}" >> $GITHUB_ENV
+
+      # ESH-AC-30: Upload cosign signature and bundle as release assets
+      - name: Upload cosign signature
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./${{ env.TARBALL }}.sig
+          asset_name: mindkeg-mcp-${{ github.event.release.tag_name }}.tgz.sig
+          asset_content_type: text/plain
+
+      - name: Upload cosign bundle
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./${{ env.TARBALL }}.bundle
+          asset_name: mindkeg-mcp-${{ github.event.release.tag_name }}.tgz.bundle
+          asset_content_type: application/json

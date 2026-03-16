@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-16
+
+### Added
+- **Encryption at rest**: AES-256-GCM application-level encryption for learning content and embedding fields, controlled via `MINDKEG_ENCRYPTION_KEY` env var
+- **Audit logging**: Structured JSON lines audit log (SIEM-compatible) for all MCP tool invocations, configurable destination via `MINDKEG_AUDIT_LOG`
+- **TTL and data retention**: Per-learning `ttl_days` field with global default, automatic purge on startup and periodic interval, `mindkeg purge` CLI for manual bulk purge
+- **Monitoring integration**: `/health` and `/metrics` (Prometheus format) endpoints on HTTP transport with configurable authentication
+- **Content sanitization**: Strip control characters and reject whitespace-only content on store/update to prevent memory poisoning
+- **Provenance tracking**: `source_agent` field on learnings to record which agent created or modified each entry
+- **Integrity checksums**: SHA-256 `integrity_hash` on learnings with opt-in verification via `verify_integrity` parameter on `search_learnings` and `get_context`
+- **Rate limiting**: Dual-bucket (write/read) in-memory token bucket rate limiter for HTTP transport, configurable via `MINDKEG_RATE_LIMIT_WRITE_RPM` and `MINDKEG_RATE_LIMIT_READ_RPM`
+- **Supply chain hardening**: Expanded SECURITY.md with SDL and threat model, CycloneDX SBOM generation, Sigstore cosign signing of npm tarballs in CI
+- CLI commands: `mindkeg encrypt-db`, `mindkeg decrypt-db`, `mindkeg purge`, `mindkeg backfill-integrity`
+- Database migration 003: adds `ttl_days`, `source_agent`, `integrity_hash` columns (non-destructive)
+
+### Changed
+- `store_learning` and `update_learning` tools now accept `source_agent` and `ttl_days` parameters
+- `search_learnings` and `get_context` tools now accept `verify_integrity` parameter
+- `createMcpServer` dependency bag expanded with audit logger and metrics collector
+- All tool handlers now emit audit entries and record Prometheus metrics
+- Publish workflow generates SBOM and cosign signature as release assets
+
 ## [0.3.0] - 2026-03-13
 
 ### Added

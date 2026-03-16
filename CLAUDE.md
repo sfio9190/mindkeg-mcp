@@ -8,7 +8,7 @@ This file provides persistent context for AI agents (Claude Code, Cursor, Windsu
 Mind Keg MCP is a TypeScript/Node.js MCP server that stores, searches, and retrieves atomic developer learnings.
 It is designed to give AI agents persistent memory across sessions.
 
-- **Version**: 0.2.0
+- **Version**: 0.4.0
 - **Runtime**: Node.js >= 22 (uses built-in `node:sqlite`)
 - **Transport**: stdio (local) + HTTP+SSE (remote)
 - **Storage**: SQLite via `node:sqlite` (`DatabaseSync` — synchronous)
@@ -23,11 +23,15 @@ cli/
   index.ts              CLI entry point (Commander.js)
   commands/
     api-key.ts          API key management (generate, list, revoke)
+    backfill-integrity.ts Compute and store integrity hashes for existing learnings
+    decrypt-db.ts       Decrypt database content/embedding fields in-place
+    dedup-scan.ts       Backfill duplicate_candidates for existing learnings
+    encrypt-db.ts       Encrypt database content/embedding fields in-place
     export.ts           Export learnings to JSON
     import.ts           Import learnings from JSON
-    dedup-scan.ts       Backfill duplicate_candidates for existing learnings
     init.ts             Project setup (copies AGENTS.md template)
     migrate.ts          Run database migrations
+    purge.ts            Purge expired or filtered learnings
     serve.ts            Start stdio or HTTP server
     stats.ts            Database statistics
 
@@ -35,9 +39,24 @@ src/
   index.ts              Server entry point, transport setup
   server.ts             MCP server, tool registration
   config.ts             Config loading (env vars → Zod-validated defaults)
+  audit/
+    audit-logger.ts     Structured JSON lines audit log writer (AuditLogger class)
+    index.ts            Audit barrel export
   auth/
     api-key.ts          API key generation (crypto.randomBytes + SHA-256)
     middleware.ts        API key validation middleware
+  crypto/
+    encryption.ts       AES-256-GCM field encryption (encrypt, decrypt, isEncrypted, parseEncryptionKey)
+    index.ts            Crypto barrel export
+  monitoring/
+    health.ts           GET /health handler (status, version, uptime, DB connectivity)
+    metrics.ts          Prometheus metrics registry and metric definitions (prom-client)
+    index.ts            Monitoring barrel export
+  security/
+    integrity.ts        SHA-256 integrity hash computation and verification
+    rate-limiter.ts     In-memory token bucket rate limiter (per-key, read/write buckets)
+    sanitize.ts         Content sanitization (strip control chars, reject whitespace-only)
+    index.ts            Security barrel export
   tools/                One file per MCP tool (9 tools)
     store-learning.ts
     search-learnings.ts
@@ -48,9 +67,11 @@ src/
     list-repositories.ts
     list-workspaces.ts
     get-context.ts
+    tool-utils.ts       Shared tool utilities (getActorFromApiKey, recordToolMetrics)
   services/
     learning-service.ts Business logic for CRUD + search + getContext
     embedding-service.ts Embedding provider abstraction
+    purge-service.ts    Orchestrates TTL-based and filter-based purge operations
     ranking.ts          Pure ranking function for get_context
     budget.ts           Pure budget allocation/trimming for get_context
     index.ts            Service barrel export
@@ -61,6 +82,7 @@ src/
     migrations/
       001-initial.ts    Initial schema + FTS5 triggers
       002-duplicate-candidates.ts  Near-duplicate detection table
+      003-ttl-and-provenance.ts    ttl_days, source_agent, integrity_hash columns
   models/
     learning.ts         Zod schemas + TypeScript types (core entity)
     repository.ts       Repository model
@@ -76,19 +98,33 @@ templates/
 
 tests/
   unit/
+    audit-logger.test.ts
     auth.test.ts
     budget.test.ts
     embedding-service.test.ts
+    encryption.test.ts
     get-context.test.ts
     init.test.ts
+    integrity.test.ts
     learning-service.test.ts
+    migration-003.test.ts
     models.test.ts
+    monitoring.test.ts
+    purge-service.test.ts
     ranking.test.ts
+    rate-limiter.test.ts
+    sanitize.test.ts
     stats.test.ts
     workspace.test.ts
   integration/
+    audit.test.ts
+    backfill-integrity.test.ts
     e2e-sqlite.test.ts
+    encryption.test.ts
     get-context.test.ts
+    migration-003.test.ts
+    provenance.test.ts
+    purge.test.ts
     sqlite-adapter.test.ts
 
 .github/workflows/
@@ -193,6 +229,10 @@ The `mindkeg` CLI (`dist/cli/index.js`) provides:
 | `mindkeg init` | Set up a project (copies AGENTS.md template) |
 | `mindkeg stats` | Display database statistics |
 | `mindkeg dedup-scan` | Backfill duplicate_candidates table for existing learnings |
+| `mindkeg purge` | Purge expired or filtered learnings (`--older-than`, `--repository`, `--workspace`, `--all`, `--confirm`) |
+| `mindkeg encrypt-db` | Encrypt all content/embedding fields in-place (backup + transaction, requires `MINDKEG_ENCRYPTION_KEY`) |
+| `mindkeg decrypt-db` | Decrypt all content/embedding fields in-place (backup + transaction, requires `MINDKEG_ENCRYPTION_KEY`) |
+| `mindkeg backfill-integrity` | Compute and store SHA-256 integrity hashes for learnings that have `integrity_hash = NULL` |
 
 ## Testing Standards
 
@@ -239,8 +279,46 @@ Matrix: Ubuntu + Windows, Node.js 22.
 - **Interface-based storage**: `StorageAdapter` interface with SQLite implementation. Allows future backend swaps.
 - **Service layer**: `LearningService` encapsulates business logic (validation, embedding generation, CRUD orchestration). Tools are thin.
 - **Factory pattern**: `storage-factory.ts` creates the appropriate adapter based on config.
-- **Dependency injection**: `createMcpServer(deps)` receives storage, embedding, and auth dependencies.
+- **Dependency injection**: `createMcpServer(deps)` receives storage, embedding, auth, audit, and metrics dependencies.
 - **Zod validation**: All external input validated through Zod schemas before reaching business logic.
+- **Shared tool utilities**: `src/tools/tool-utils.ts` provides `getActorFromApiKey` and `recordToolMetrics` used by all tool handlers.
+
+### Encryption at Rest
+- Implemented in `src/crypto/encryption.ts` using `node:crypto` AES-256-GCM (no native dependencies)
+- Only `content` and `embedding` fields are encrypted; metadata (category, tags, timestamps) remains plaintext
+- Storage format: `<iv_b64>:<ciphertext_b64>:<auth_tag_b64>` — each write gets a unique random 12-byte IV
+- Conditioned on `MINDKEG_ENCRYPTION_KEY` presence — no performance penalty when key is not set
+- FTS5 keyword search does NOT work with encrypted content; requires semantic search via embeddings (see Common Pitfalls)
+- `mindkeg encrypt-db` / `mindkeg decrypt-db` CLI commands migrate existing databases; both create a backup before operating inside a single transaction
+
+### Audit Logging
+- Implemented in `src/audit/audit-logger.ts` as the `AuditLogger` class
+- Structured JSON lines (one entry per line, ISO 8601 timestamps) — SIEM-compatible
+- Destination configurable via `MINDKEG_AUDIT_LOG`: file path (append-only), `"stderr"`, or `"none"` (disabled)
+- `AuditEntry` fields: `timestamp`, `action`, `actor` (API key prefix or "stdio"), `resource_id`, `result`, `error_code`, `client`, `metadata`
+- Sensitive fields (`content`, `embedding`) are never included in audit entries
+- Audit failures are non-fatal: logged as warnings, never propagate to the primary operation
+
+### Monitoring
+- Implemented in `src/monitoring/` using `prom-client` (Prometheus client library)
+- `/health` endpoint (GET): returns JSON with `status`, `version`, `uptime`, `database` connectivity — HTTP 200 or 503
+- `/metrics` endpoint (GET): returns Prometheus text format scrape output
+- Both endpoints bypass API key authentication by default; set `MINDKEG_METRICS_AUTH=true` to require auth
+- Metrics defined: `mindkeg_learnings_total` (gauge), `mindkeg_tool_invocations_total` (counter), `mindkeg_tool_duration_seconds` (histogram), `mindkeg_errors_total` (counter), `mindkeg_uptime_seconds` (gauge), `mindkeg_search_latency_seconds` (histogram)
+
+### Rate Limiting
+- Implemented in `src/security/rate-limiter.ts` as the `RateLimiter` class (token bucket algorithm)
+- HTTP transport only — stdio transport is local and does not need rate limiting
+- Per-API-key-prefix isolation: each key has independent write and read buckets
+- Write tools (`store_learning`, `update_learning`, `delete_learning`, `deprecate_learning`, `flag_stale`): governed by `MINDKEG_RATE_LIMIT_WRITE_RPM` (default 100)
+- Read tools (`search_learnings`, `get_context`, `list_repositories`, `list_workspaces`): governed by `MINDKEG_RATE_LIMIT_READ_RPM` (default 300)
+- Returns HTTP 429 with `Retry-After` header when a bucket is exhausted
+- State is in-memory and resets on server restart
+
+### Content Security
+- Sanitization (`src/security/sanitize.ts`): strips control characters (U+0000-U+001F except LF/CR), rejects whitespace-only content; integrated into Zod `CreateLearningInputSchema` and `UpdateLearningInputSchema` via `.transform()` / `.superRefine()`
+- Integrity hashing (`src/security/integrity.ts`): SHA-256 over `content|category|sorted_tags_json|repository|workspace`; computed on every store/update and stored as `integrity_hash`; verifiable on-demand via `verify_integrity` parameter on `search_learnings` and `get_context`
+- Provenance tracking: `source_agent` field on learnings records which agent created/updated the entry
 
 ### Storage
 - All SQL uses parameterized queries (never string interpolation)
@@ -267,7 +345,7 @@ Matrix: Ubuntu + Windows, Node.js 22.
 
 ### Data Model
 
-- `content`: max 500 characters (enforced by Zod + DB constraint)
+- `content`: max 500 characters (enforced by Zod + DB constraint); sanitized to strip control characters on write
 - `category`: exactly one of: `architecture`, `conventions`, `debugging`, `gotchas`, `dependencies`, `decisions`
 - `repository`: null = global or workspace-scoped; set = repo-specific
 - `workspace`: null = repo-specific or global; set = workspace-scoped (mutually exclusive with `repository`)
@@ -276,6 +354,9 @@ Matrix: Ubuntu + Windows, Node.js 22.
 - `stale_flag`: boolean, set when an agent thinks a learning may be outdated
 - `embedding`: float[] stored as JSON text (384 dims for FastEmbed, 1536 dims for OpenAI)
 - `scope` field on `LearningWithScore`: `'repo' | 'workspace' | 'global'` — annotated on search results
+- `ttl_days`: nullable integer; overrides global default TTL for this learning; null = use global default or no expiry
+- `source_agent`: nullable string; agent name that created/last updated the learning (provenance tracking)
+- `integrity_hash`: nullable string; SHA-256 hex hash of canonical fields for tamper detection; null for legacy learnings
 
 ### Logging
 - Logger writes to **stderr** (`fd 2`) — never stdout — because stdout is used for MCP stdio protocol
@@ -294,6 +375,13 @@ Matrix: Ubuntu + Windows, Node.js 22.
 | MINDKEG_PORT | 52100 | HTTP server port |
 | MINDKEG_LOG_LEVEL | info | debug / info / warn / error |
 | MINDKEG_API_KEY | (none) | API key for stdio transport |
+| MINDKEG_ENCRYPTION_KEY | (none) | Base64-encoded 256-bit key for AES-256-GCM content/embedding encryption |
+| MINDKEG_AUDIT_LOG | ~/.mindkeg/audit.jsonl | Audit log destination: file path, `"stderr"`, or `"none"` |
+| MINDKEG_DEFAULT_TTL_DAYS | (none) | Global default TTL in days; null = no automatic expiration |
+| MINDKEG_PURGE_INTERVAL_HOURS | 24 | How often (hours) the server runs automatic purge of expired learnings |
+| MINDKEG_RATE_LIMIT_WRITE_RPM | 100 | Max write requests per minute per API key (HTTP transport only) |
+| MINDKEG_RATE_LIMIT_READ_RPM | 300 | Max read requests per minute per API key (HTTP transport only) |
+| MINDKEG_METRICS_AUTH | false | Require API key auth on `/health` and `/metrics` endpoints |
 
 ### Embedding Providers
 
@@ -305,10 +393,13 @@ All CRUD operations work identically regardless of provider. Only search quality
 
 ## Common Pitfalls
 
-- **SQLite is synchronous**: `node:sqlite` (`DatabaseSync`) is synchronous. Do NOT use `await` on DB calls. This is different from most Node.js database libraries.
+- **SQLite is synchronous**: `node:sqlite` (`DatabaseSync`) is synchronous. Do NOT use `await` on DB calls. This is different from most Node.js database libraries. The purge methods (`purgeExpired`, `purgeByFilter`) follow the same synchronous pattern — never make them async.
 - **Logger must use stderr**: `pino` logger destination must be `fd 2` (stderr) or the MCP stdio transport breaks. Never write to stdout from server code.
 - **API keys are displayed ONCE**: At creation time only. They are SHA-256 hashed and never retrievable afterward.
 - **FTS5 trigger maintenance**: Insert/update/delete on `learnings` must sync the `learnings_fts` shadow table. The triggers are set up in `001-initial.ts` migration.
+- **FTS5 + encryption incompatibility**: When `MINDKEG_ENCRYPTION_KEY` is set, the `content` field is stored as encrypted ciphertext. FTS5 full-text search cannot match against ciphertext — keyword search returns no results. Semantic search (FastEmbed or OpenAI) works correctly because it operates on the in-memory plaintext vector. Always use an embedding provider when encryption is enabled.
+- **Encryption key validation**: `MINDKEG_ENCRYPTION_KEY` must be a base64-encoded 256-bit (32-byte) value. The server fails to start if the key is present but invalid. Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+- **TTL anchor on `updated_at`**: TTL expiry is computed as `updated_at + ttl_days`. Updating a learning resets its TTL clock. Use `created_at` if you need immutable expiry — but the current schema anchors on `updated_at`.
 - **Port 52100**: Default HTTP port. Document this clearly for firewall rules.
 - **ESM imports need `.js` extension**: Internal imports must use `.js` extension (e.g., `./tools/store-learning.js`) even though source files are `.ts`. This is required for ESM resolution.
 - **Scope mutual exclusivity**: `repository` and `workspace` are mutually exclusive on learnings. Setting both is rejected by Zod validation. Check the refine rule in `CreateLearningInputSchema`.
